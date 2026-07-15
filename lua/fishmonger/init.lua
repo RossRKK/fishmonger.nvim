@@ -243,6 +243,13 @@ function M.show(slot, opts)
   vim.api.nvim_set_current_win(win)
 
   if not have_buf then
+    -- Re-assert the winbar synchronously before sizing the pty: an adopting
+    -- layout manager (edgy) blanks it on the buffer swap/focus above, and if
+    -- start_job sized the pty to that transiently-taller window, the deferred
+    -- reassertion below would shrink the window by one row right after the
+    -- TUI's first render -- an off-by-one repaint. The scheduled reassertion
+    -- further down stays as a backstop for any later async re-blanking.
+    apply_winbar(win)
     start_job(buf) -- buf is on screen now, so the pty sizes to the side window
     M.slots[slot] = { buf = buf }
   end
