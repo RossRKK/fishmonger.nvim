@@ -251,8 +251,12 @@ function M.show(slot, opts)
   vim.schedule(function()
     -- Re-assert the winbar: an adopting layout manager (edgy) blanks it
     -- synchronously on the buffer swap above, so restore it after that settles.
-    if viewport() then
-      apply_winbar(win)
+    -- Use viewport()'s result, not the `win` captured above: if the side window
+    -- was closed and reopened within this tick, `win` is a stale (invalid)
+    -- handle while viewport() is the live one.
+    local vp = viewport()
+    if vp then
+      apply_winbar(vp)
     end
     pcall(vim.cmd, "redrawstatus")
     if opts.insert ~= false then
@@ -419,8 +423,9 @@ function M.setup_keymaps()
   -- for the follow-up key. Separate <C-b>1.. maps instead race the mapping
   -- timeout in terminal mode -- a digit pressed a beat late leaks to the shell.
   -- Global so it works from the live terminal and the editor (to summon a tab
-  -- when the panel is closed). Trade-off accepted: <C-b>
-  -- no longer pages back in normal-mode buffers.
+  -- when the panel is closed). In normal mode an unrecognised follow-up key
+  -- falls through to the builtin <C-b> (page back) plus that key, so paging
+  -- still works — just one keystroke later than stock.
   local function tab_prefix()
     local ok, key = pcall(vim.fn.getcharstr)
     if not ok or key == "" then
@@ -438,6 +443,11 @@ function M.setup_keymaps()
       if ok2 and dest:match("^[1-9]$") then
         M.move(tonumber(dest))
       end
+    elseif vim.api.nvim_get_mode().mode:sub(1, 1) == "n" then
+      -- Not one of ours: replay the raw <C-b> + key unmapped ("n") so the
+      -- builtin scroll-back (and whatever the key does) still happens.
+      local cb = vim.api.nvim_replace_termcodes("<C-b>", true, false, true)
+      vim.api.nvim_feedkeys(cb .. key, "n", false)
     end
   end
   vim.keymap.set(
