@@ -14,8 +14,7 @@
 -- (Claude Code) never repaints into a stale geometry -- which is what produced
 -- the doubled/off-by-one rows the old hide/show-per-terminal approach caused
 -- (each show recreated a window, and edgy resized it from default -> 0.4 mid
--- render). We own the window and spawn terminals directly with jobstart rather
--- than going through snacks.terminal, whose fixbuf autocmd fights a buffer swap.
+-- render). We own the window and spawn terminals directly with jobstart.
 --
 -- Slots (1..9) are ours. M.slots is the sole slot->buffer mapping. Renumbering is
 -- a swap in a table we own. Everything else (the tab strip) keys off the buffer.
@@ -39,6 +38,8 @@ local config = {
   -- Filetype tagged on every terminal buffer/window. fishmonger's own identity;
   -- an external layout manager can filter on it to adopt the window.
   filetype = "fishmonger",
+  -- Shell command to spawn in each terminal. Defaults to the user's shell.
+  shell = vim.o.shell,
 }
 
 -- Resolve the configured width to a column count.
@@ -115,7 +116,7 @@ end
 -- through -- the side terminal is full-height, so <C-k> window-nav is useless
 -- here and the running app (e.g. Claude Code) should get the key instead.
 local function start_job(buf)
-  vim.fn.jobstart(vim.o.shell, { term = true })
+  vim.fn.jobstart(config.shell, { term = true })
   vim.bo[buf].filetype = config.filetype
   vim.keymap.set("t", "<C-k>", "<C-k>", { buffer = buf })
 end

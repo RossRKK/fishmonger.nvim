@@ -1,7 +1,7 @@
 -- Runtime for the headless test suite: this plugin plus plenary (busted harness
 -- + luassert). plenary is reused from the Neovim config's lazy install so CI and
--- a local run share one copy. No snacks: the spec fakes vim.fn.jobstart and
--- drives the real window/buffer management, which runs fine headlessly.
+-- a local run share one copy. The spec fakes vim.fn.jobstart and drives the
+-- real window/buffer management, which runs fine headlessly.
 
 local root = vim.fn.fnamemodify(vim.fn.expand("<sfile>:p"), ":h:h")
 local plenary = vim.fn.stdpath("data") .. "/lazy/plenary.nvim"
