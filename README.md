@@ -9,10 +9,6 @@ a tab strip rendered in the tabline. No tmux backend — the window semantics ar
 reimplemented natively over nvim terminal buffers, spawned directly with
 `jobstart`.
 
-Yanks from a fishmonger terminal join lines that soft-wrapped at the terminal
-edge (nvim stores each screen row as its own buffer line), so a wrapped shell
-line pastes as one line instead of carrying a hard newline at every wrap point.
-
 ## Requirements
 
 - Neovim 0.10+
