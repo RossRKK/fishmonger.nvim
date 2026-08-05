@@ -40,6 +40,10 @@ local config = {
   filetype = "fishmonger",
   -- Shell command to spawn in each terminal. Defaults to the user's shell.
   shell = vim.o.shell,
+  -- Visual-mode key, buffer-local to fishmonger terminals, that yanks the
+  -- selection joined into a single line (see M.yank_joined) — for copying a
+  -- command out of output a TUI word-wrapped itself. Set false to disable.
+  joined_yank = "<leader>y",
 }
 
 -- Resolve the configured width to a column count.
@@ -119,6 +123,11 @@ local function start_job(buf)
   vim.fn.jobstart(config.shell, { term = true })
   vim.bo[buf].filetype = config.filetype
   vim.keymap.set("t", "<C-k>", "<C-k>", { buffer = buf })
+  if config.joined_yank then
+    vim.keymap.set("x", config.joined_yank, function()
+      M.yank_joined()
+    end, { buffer = buf, desc = "Yank selection joined into one line" })
+  end
 end
 
 -- Kill a terminal's shell by deleting its buffer: that stops the job and fires
@@ -221,6 +230,55 @@ local function term_procs(term)
   return pid, tpgid
 end
 
+-- The OSC title the program in `term` set (b:term_title), or nil.
+local function term_title(term)
+  if not (term and term.buf and vim.api.nvim_buf_is_valid(term.buf)) then
+    return nil
+  end
+  local ok, title = pcall(function()
+    return vim.b[term.buf].term_title
+  end)
+  if ok and type(title) == "string" and title ~= "" then
+    return title
+  end
+end
+
+-- The leading status glyph of a tab's title, if it has one. Claude Code
+-- prefixes its OSC title with a single symbol (✳ while thinking, etc.) that
+-- flips with its state; a multibyte first character is taken to be such an
+-- icon, while a plain-ASCII title (a shell's "fish /home/…") yields none.
+-- A helper for User FishmongerTabsChanged consumers; pure so the tests can
+-- pin it.
+function M.title_icon(title)
+  local first = vim.fn.strcharpart(title or "", 0, 1)
+  if first ~= "" and #first > 1 then
+    return first
+  end
+end
+
+-- Announce the current tab set whenever it (or a tab's title) changes, as a
+-- `User FishmongerTabsChanged` autocmd whose data is
+--   { tabs = { { slot = n, title = <b:term_title or nil> }, ... },  -- slot order
+--     current = <shown slot> }
+-- so personal config can compose on top (e.g. bubble the tabs' status glyphs
+-- into 'titlestring' for the outer terminal's tab) without fishmonger
+-- hardcoding any one policy.
+local function emit_tabs_changed()
+  local tabs = {}
+  for _, e in ipairs(managed()) do
+    tabs[#tabs + 1] = { slot = e.slot, title = term_title(e.term) }
+  end
+  vim.api.nvim_exec_autocmds("User", {
+    pattern = "FishmongerTabsChanged",
+    data = { tabs = tabs, current = M.current },
+  })
+end
+
+-- Forward declaration: refresh_os_title is defined further down (with the
+-- title helpers) but called from show/toggle/kill/setup_exit above it — without
+-- this, those compile as global lookups and crash on a nil value.
+local refresh_os_title
+
 -- Show the terminal in `slot`, creating it if the slot is empty. Opens the shared
 -- side window only if it isn't already open; otherwise just swaps its buffer.
 -- `opts.insert` (default true) controls whether we land in terminal mode.
@@ -267,6 +325,7 @@ function M.show(slot, opts)
       apply_winbar(vp)
     end
     pcall(vim.cmd, "redrawstatus")
+    emit_tabs_changed()
     if opts.insert ~= false then
       vim.cmd("startinsert")
     end
@@ -319,6 +378,7 @@ function M.kill()
     end
   end
   shutdown(term)
+  emit_tabs_changed()
 end
 
 -- <C-b>.{1-9}: renumber the shown side terminal to `dest` (tmux move-window).
@@ -338,6 +398,112 @@ function M.move(dest)
   end)
 end
 
+-- Yanking from terminal scrollback: nvim stores each screen row as its own
+-- buffer line, so a shell line that soft-wrapped at the pty edge yanks with a
+-- hard newline at every wrap point — which you then have to delete by hand
+-- after pasting. The wrap is detectable: a soft-wrapped row fills the terminal
+-- exactly (its continuation is the next row), while a row any narrower really
+-- does end in a newline. unwrap() joins yanked fragments on that signal.
+--
+-- Pure so the tests can pin it. `lines` are the yanked fragments, `widths[i]`
+-- the display width of the buffer line fragment i came from (a charwise yank
+-- can start mid-line, so the first fragment may be narrower than its source
+-- line — but it still ends at that line's end, so the source line's width, not
+-- the fragment's, decides the join), and `cols` the terminal width.
+function M.unwrap(lines, widths, cols)
+  local out, pending = {}, nil
+  for i, line in ipairs(lines) do
+    pending = pending and (pending .. line) or line
+    if i == #lines or widths[i] ~= cols then
+      out[#out + 1] = pending
+      pending = nil
+    end
+  end
+  return out
+end
+
+-- The TextYankPost half of unwrap: rewrite the just-yanked register in place.
+-- Blockwise yanks are left alone (they cut columns out of rows; wrap
+-- continuation doesn't apply to them).
+local function unwrap_yank()
+  local ev = vim.v.event
+  local buf = vim.api.nvim_get_current_buf()
+  if ev.operator ~= "y" or vim.bo[buf].buftype ~= "terminal" or vim.bo[buf].filetype ~= config.filetype then
+    return
+  end
+  if #ev.regcontents < 2 or ev.regtype:sub(1, 1) == "\22" then
+    return
+  end
+  -- The pty was sized to the window's text area, so that is the wrap column.
+  local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
+  local cols = info.width - info.textoff
+  local start = vim.api.nvim_buf_get_mark(buf, "[")[1]
+  local src = vim.api.nvim_buf_get_lines(buf, start - 1, start - 1 + #ev.regcontents, false)
+  local widths = {}
+  for i, line in ipairs(src) do
+    widths[i] = vim.fn.strdisplaywidth(line)
+  end
+  local joined = M.unwrap(ev.regcontents, widths, cols)
+  if #joined == #ev.regcontents then
+    return
+  end
+  vim.fn.setreg(ev.regname == "" and '"' or ev.regname, joined, ev.regtype)
+  -- Rewriting the unnamed register via setreg doesn't sync the system
+  -- clipboard the way the yank itself did under 'clipboard'; mirror explicitly.
+  if ev.regname == "" then
+    for _, cb in ipairs(vim.opt.clipboard:get()) do
+      if cb == "unnamed" then
+        vim.fn.setreg("*", joined, ev.regtype)
+      elseif cb == "unnamedplus" then
+        vim.fn.setreg("+", joined, ev.regtype)
+      end
+    end
+  end
+end
+
+-- Some programs (Claude Code notably) word-wrap their own output inside a
+-- margin and write hard newlines, so those wraps carry no width signal
+-- unwrap() could detect — an indented continuation row is indistinguishable
+-- from genuinely multi-line output. Joining those is therefore deliberate,
+-- not automatic: joined() flattens a selection into ONE line. It is still
+-- wrap-aware: a full-width row is a pty soft-wrap whose continuation follows
+-- immediately (join with nothing), anything narrower was word-wrapped (the
+-- break replaced a space — join with one space, stripping the continuation
+-- indent the wrapping program added). Pure so the tests can pin it; args as
+-- for unwrap().
+function M.joined(lines, widths, cols)
+  local out = lines[1] or ""
+  for i = 2, #lines do
+    if widths[i - 1] == cols then
+      out = out .. lines[i]
+    else
+      out = out:gsub("%s+$", "") .. " " .. lines[i]:gsub("^%s+", "")
+    end
+  end
+  return out
+end
+
+-- The mapping half of joined() (visual mode, see config.joined_yank): flatten
+-- the current selection into the register the key was prefixed with
+-- (v:register — the same register a plain y would use, so the unnamed/
+-- clipboard default still applies), then leave visual mode like y does.
+function M.yank_joined()
+  local buf = vim.api.nvim_get_current_buf()
+  local vpos, cpos = vim.fn.getpos("v"), vim.fn.getpos(".")
+  local lines = vim.fn.getregion(vpos, cpos, { type = vim.api.nvim_get_mode().mode })
+  local first = math.min(vpos[2], cpos[2])
+  local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
+  local cols = info.width - info.textoff
+  local src = vim.api.nvim_buf_get_lines(buf, first - 1, first - 1 + #lines, false)
+  local widths = {}
+  for i, line in ipairs(src) do
+    widths[i] = vim.fn.strdisplaywidth(line)
+  end
+  vim.fn.setreg(vim.v.register, M.joined(lines, widths, cols), "v")
+  local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+  vim.api.nvim_feedkeys(esc, "n", false)
+end
+
 local function truncate(s, n)
   if vim.fn.strchars(s) > n then
     return vim.fn.strcharpart(s, 0, n - 1) .. "…"
@@ -349,15 +515,7 @@ end
 -- Code updates this live, including its input-needed marker), falling back to
 -- the foreground process name from /proc, then "term".
 local function label(slot, term)
-  local name
-  if term.buf and vim.api.nvim_buf_is_valid(term.buf) then
-    local ok, title = pcall(function()
-      return vim.b[term.buf].term_title
-    end)
-    if ok and type(title) == "string" and title ~= "" then
-      name = title
-    end
-  end
+  local name = term_title(term)
   if not name then
     local pid, tpgid = term_procs(term)
     if pid then
@@ -402,12 +560,21 @@ function M.setup(opts)
 
   local grp = vim.api.nvim_create_augroup("Fishmonger", { clear = true })
   -- term_title changes arrive via TermRequest (Claude Code updates it live,
-  -- including its input-needed marker); repaint the winbar on those.
+  -- including its input-needed marker); repaint the winbar and re-bubble the
+  -- OS title on those. Defer the bubble: b:term_title is applied after the
+  -- TermRequest callback runs, so reading it synchronously sees the old value.
   vim.api.nvim_create_autocmd("TermRequest", {
     group = grp,
     callback = function()
       pcall(vim.cmd, "redrawstatus")
+      vim.schedule(emit_tabs_changed)
     end,
+  })
+  -- Join soft-wrapped rows when yanking from a fishmonger terminal's
+  -- scrollback, so a wrapped shell line pastes as one line (see unwrap above).
+  vim.api.nvim_create_autocmd("TextYankPost", {
+    group = grp,
+    callback = unwrap_yank,
   })
   -- Re-evaluate a function width when the screen resizes so the side window keeps
   -- its share. winfixwidth pins it against incidental splits, not VimResized.
@@ -494,6 +661,7 @@ function M.setup_exit()
         if vim.api.nvim_buf_is_valid(args.buf) then
           pcall(vim.api.nvim_buf_delete, args.buf, { force = true })
         end
+        emit_tabs_changed()
       end)
     end,
   })
