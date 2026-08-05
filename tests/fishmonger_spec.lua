@@ -251,6 +251,94 @@ describe("terms.kill", function()
   end)
 end)
 
+describe("terms.unwrap", function()
+  local terms
+
+  before_each(function()
+    terms = fresh_terms()
+  end)
+
+  --- Widths for fragments that are whole buffer lines (the linewise-yank case).
+  local function own_widths(lines)
+    local out = {}
+    for i, line in ipairs(lines) do
+      out[i] = vim.fn.strdisplaywidth(line)
+    end
+    return out
+  end
+
+  it("joins a row wrapped at the terminal edge with its continuation", function()
+    local lines = { ("x"):rep(80), "tail" }
+    assert.same({ ("x"):rep(80) .. "tail" }, terms.unwrap(lines, own_widths(lines), 80))
+  end)
+
+  it("keeps the newline after a row narrower than the terminal", function()
+    local lines = { "first", "second" }
+    assert.same(lines, terms.unwrap(lines, own_widths(lines), 80))
+  end)
+
+  it("joins a run of full-width rows into one line", function()
+    local a, b = ("a"):rep(80), ("b"):rep(80)
+    local lines = { a, b, "tail", "after" }
+    assert.same({ a .. b .. "tail", "after" }, terms.unwrap(lines, own_widths(lines), 80))
+  end)
+
+  -- A full-width final row may continue beyond the yank, but that continuation
+  -- wasn't yanked -- there is nothing to join it to.
+  it("never joins past the last yanked line", function()
+    local lines = { ("x"):rep(80) }
+    assert.same(lines, terms.unwrap(lines, own_widths(lines), 80))
+  end)
+
+  -- A charwise yank can start mid-row: the first fragment is narrower than the
+  -- terminal even though its source row soft-wraps. The source row's width is
+  -- what decides the join.
+  it("decides by the source line's width, not the fragment's", function()
+    assert.same({ "tail-of-rowtail" }, terms.unwrap({ "tail-of-row", "tail" }, { 80, 4 }, 80))
+  end)
+end)
+
+describe("terms.joined", function()
+  local terms
+
+  before_each(function()
+    terms = fresh_terms()
+  end)
+
+  -- A full-width row is a pty soft-wrap: its continuation follows immediately,
+  -- so nothing is inserted at the seam.
+  it("joins pty soft-wraps with nothing", function()
+    local head = ("x"):rep(80)
+    assert.equals(head .. "tail", terms.joined({ head, "tail" }, { 80, 4 }, 80))
+  end)
+
+  -- A row narrower than the terminal was word-wrapped by the program itself
+  -- (the break replaced a space): join with one space, stripping the
+  -- continuation indent the wrapper added.
+  it("joins word-wrapped rows with a space, stripping the indent", function()
+    assert.equals(
+      "nix shell nixpkgs#gnumake -c make test",
+      terms.joined({ "nix shell nixpkgs#gnumake -c make", "  test" }, { 33, 6 }, 80)
+    )
+  end)
+
+  it("trims trailing padding before a word-wrap seam", function()
+    assert.equals("one two", terms.joined({ "one   ", "  two" }, { 6, 5 }, 80))
+  end)
+
+  it("handles a mix of pty wraps and word wraps", function()
+    local full = ("a"):rep(80)
+    assert.equals(
+      full .. "end then more",
+      terms.joined({ full, "end", "  then", "more" }, { 80, 3, 6, 4 }, 80)
+    )
+  end)
+
+  it("returns a single fragment unchanged", function()
+    assert.equals("solo", terms.joined({ "solo" }, { 4 }, 80))
+  end)
+end)
+
 describe("terms.toggle", function()
   local terms
 
@@ -282,5 +370,28 @@ describe("terms.toggle", function()
     terms.toggle()
     assert.same({ 1 }, slots_of(terms))
     assert.equals(1, open_slot(terms))
+  end)
+end)
+
+describe("terms.title_icon", function()
+  local terms
+
+  before_each(function()
+    terms = fresh_terms()
+  end)
+
+  it("extracts a leading multibyte status glyph", function()
+    assert.equals("✳", terms.title_icon("✳ Refactoring the parser"))
+    assert.equals("·", terms.title_icon("· idle"))
+  end)
+
+  it("yields nothing for a plain-ASCII title", function()
+    assert.is_nil(terms.title_icon("fish /home/user"))
+    assert.is_nil(terms.title_icon("nvim .dotfiles ~"))
+  end)
+
+  it("yields nothing for an empty or missing title", function()
+    assert.is_nil(terms.title_icon(""))
+    assert.is_nil(terms.title_icon(nil))
   end)
 end)
