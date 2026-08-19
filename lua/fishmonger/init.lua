@@ -18,6 +18,12 @@
 --
 -- Slots (1..9) are ours. M.slots is the sole slot->buffer mapping. Renumbering is
 -- a swap in a table we own. Everything else (the tab strip) keys off the buffer.
+--
+-- All of that is PER NVIM TABPAGE. A tabpage is a workspace (one project), so it
+-- gets its own side window and its own slots 1..9, spawned in that tabpage's cwd.
+-- Sharing them would be actively wrong: nvim_win_is_valid is true for a window in
+-- another tabpage, so a global viewport would make <C-t> in tab 2 focus tab 1's
+-- terminal -- i.e. teleport you to the other project.
 
 local M = {}
 
@@ -48,16 +54,46 @@ local function want_width()
   return type(w) == "function" and w() or w
 end
 
-M.current = BASE -- slot currently shown
-M.slots = {} -- slot (1..9) -> { buf = <bufnr> }
-M.win = nil -- the single side window (shared viewport), or nil when closed
+-- Per-tabpage state, keyed by tabpage handle:
+--   current = slot currently shown
+--   slots   = slot (1..9) -> { buf = <bufnr> }
+--   win     = the tabpage's single side window (shared viewport), or nil when closed
+local states = {}
 
--- The side window if it still exists, else nil (and forget the stale handle).
-local function viewport()
-  if M.win and vim.api.nvim_win_is_valid(M.win) then
-    return M.win
+-- This tabpage's state, created on first use. Entries for tabpages that have
+-- since closed are dropped here as well as in the TabClosed handler, which only
+-- runs while fishmonger is set up.
+local function st(tab)
+  for handle in pairs(states) do
+    if not vim.api.nvim_tabpage_is_valid(handle) then
+      states[handle] = nil
+    end
   end
-  M.win = nil
+  tab = tab or vim.api.nvim_get_current_tabpage()
+  states[tab] = states[tab] or { current = BASE, slots = {}, win = nil }
+  return states[tab]
+end
+
+-- `current`, `slots` and `win` read through to the CURRENT tabpage's state, so
+-- the module's public surface is unchanged from when there was only one. Reads
+-- only: internals assign through st(), and nothing outside writes these.
+setmetatable(M, {
+  __index = function(_, key)
+    if key == "current" or key == "slots" or key == "win" then
+      return st()[key]
+    end
+  end,
+})
+
+-- The current tabpage's side window if it still exists, else nil (and forget the
+-- stale handle). Windows never move between tabpages, so a handle stored here is
+-- either this tabpage's or dead.
+local function viewport()
+  local state = st()
+  if state.win and vim.api.nvim_win_is_valid(state.win) then
+    return state.win
+  end
+  state.win = nil
   return nil
 end
 
@@ -95,7 +131,7 @@ local function open_viewport(buf)
   style_window(win)
   pcall(vim.api.nvim_win_set_width, win, want_width())
   vim.wo[win].winfixwidth = true
-  M.win = win
+  st().win = win
   return win
 end
 
@@ -133,12 +169,12 @@ local function clamp(slot)
   return math.max(BASE, math.min(MAX, slot))
 end
 
--- Our side terminals as a slot-ordered list of { slot, term } pairs, including
--- hidden ones so a tab persists after you switch away from it (tmux-window
--- semantics).
-local function managed()
+-- This tabpage's side terminals as a slot-ordered list of { slot, term } pairs,
+-- including hidden ones so a tab persists after you switch away from it
+-- (tmux-window semantics).
+local function managed(state)
   local out = {}
-  for slot, term in pairs(M.slots) do
+  for slot, term in pairs((state or st()).slots) do
     out[#out + 1] = { slot = slot, term = term }
   end
   table.sort(out, function(a, b)
@@ -147,10 +183,22 @@ local function managed()
   return out
 end
 
-local function slot_of_buf(buf)
-  for _, e in ipairs(managed()) do
+local function slot_of_buf(buf, state)
+  for _, e in ipairs(managed(state)) do
     if e.term.buf == buf then
       return e.slot, e.term
+    end
+  end
+end
+
+-- Locate `buf` in ANY tabpage's slots, returning its owning state, slot and term.
+-- TermClose fires wherever the shell died, which needn't be the tabpage you're
+-- looking at (a background build finishing in another project's terminal).
+local function owner_of_buf(buf)
+  for tab, state in pairs(states) do
+    local slot, term = slot_of_buf(buf, state)
+    if slot then
+      return state, slot, term, tab
     end
   end
 end
@@ -176,8 +224,8 @@ end
 
 -- The first surviving managed terminal (used to pick a replacement when the shown
 -- one is killed/exits).
-local function first_alive()
-  for _, e in ipairs(managed()) do
+local function first_alive(state)
+  for _, e in ipairs(managed(state)) do
     if vim.api.nvim_buf_is_valid(e.term.buf) then
       return e.slot, e.term
     end
@@ -247,21 +295,45 @@ function M.title_icon(title)
   end
 end
 
--- Announce the current tab set whenever it (or a tab's title) changes, as a
+--- A tabpage's side terminals, in slot order, as { slot = n, title = <b:term_title
+--- or nil> }. Public so consumers can ask about a tabpage they aren't in --
+--- FishmongerTabsChanged says which one changed, and answering "what is every
+--- workspace's state" then needs a query, not just the event.
+---@param tab? integer tabpage handle (default: current)
+---@return { slot: integer, title: string? }[]
+function M.tabs(tab)
+  local state = tab and states[tab] or (tab == nil and st())
+  if not state then
+    return {} -- a tabpage that has never opened a terminal
+  end
+  local out = {}
+  for _, e in ipairs(managed(state)) do
+    out[#out + 1] = { slot = e.slot, title = term_title(e.term) }
+  end
+  return out
+end
+
+-- Announce a tabpage's tab set whenever it (or a tab's title) changes, as a
 -- `User FishmongerTabsChanged` autocmd whose data is
---   { tabs = { { slot = n, title = <b:term_title or nil> }, ... },  -- slot order
+--   { tab = <tabpage handle>,
+--     tabs = { { slot = n, title = <b:term_title or nil> }, ... },  -- slot order
 --     current = <shown slot> }
 -- so personal config can compose on top (e.g. bubble the tabs' status glyphs
--- into 'titlestring' for the outer terminal's tab) without fishmonger
--- hardcoding any one policy.
-local function emit_tabs_changed()
-  local tabs = {}
-  for _, e in ipairs(managed()) do
-    tabs[#tabs + 1] = { slot = e.slot, title = term_title(e.term) }
+-- into 'titlestring', or onto the tabpage's label) without fishmonger hardcoding
+-- any one policy.
+--
+-- `tab` matters because terminals in a BACKGROUND tabpage keep running and keep
+-- updating their titles: an event is not necessarily about the workspace you are
+-- looking at, and a consumer that assumed the current one would paint another
+-- project's status onto this one.
+local function emit_tabs_changed(tab)
+  tab = tab or vim.api.nvim_get_current_tabpage()
+  if not states[tab] then
+    return
   end
   vim.api.nvim_exec_autocmds("User", {
     pattern = "FishmongerTabsChanged",
-    data = { tabs = tabs, current = M.current },
+    data = { tab = tab, tabs = M.tabs(tab), current = states[tab].current },
   })
 end
 
@@ -277,8 +349,9 @@ function M.show(slot, opts)
   opts = opts or {}
   slot = clamp(slot)
 
+  local state = st()
   local win = viewport()
-  local term = M.slots[slot]
+  local term = state.slots[slot]
   local have_buf = term and vim.api.nvim_buf_is_valid(term.buf)
   local buf = have_buf and term.buf or make_term_buf()
 
@@ -301,10 +374,10 @@ function M.show(slot, opts)
     -- further down stays as a backstop for any later async re-blanking.
     apply_winbar(win)
     start_job(buf) -- buf is on screen now, so the pty sizes to the side window
-    M.slots[slot] = { buf = buf }
+    state.slots[slot] = { buf = buf }
   end
 
-  M.current = slot
+  state.current = slot
   vim.schedule(function()
     -- Re-assert the winbar: an adopting layout manager (edgy) blanks it
     -- synchronously on the buffer swap above, so restore it after that settles.
@@ -326,19 +399,21 @@ end
 -- <C-t>: toggle the side slot — close the window if open (buffers stay alive),
 -- else re-open showing the current tab.
 function M.toggle()
+  local state = st()
   local win = viewport()
   if win then
     pcall(vim.api.nvim_win_close, win, false)
-    M.win = nil
+    state.win = nil
   else
-    M.show(M.current or BASE)
+    M.show(state.current or BASE)
   end
 end
 
 -- <C-b>c: open the lowest unused slot.
 function M.new()
+  local state = st()
   for i = BASE, MAX do
-    if not M.slots[i] then
+    if not state.slots[i] then
       M.show(i)
       return
     end
@@ -353,19 +428,20 @@ end
 -- window, which edgy would eject. TermClose (setup_exit) is a no-op afterward
 -- since we've already freed the slot.
 function M.kill()
+  local state = st()
   local slot, term = current_target()
   if not slot or not term then
     return
   end
-  M.slots[slot] = nil
+  state.slots[slot] = nil
   local win = viewport()
   if win and vim.api.nvim_win_get_buf(win) == term.buf then
-    local nxt = first_alive()
+    local nxt = first_alive(state)
     if nxt then
       M.show(nxt)
     else
       pcall(vim.api.nvim_win_close, win, true)
-      M.win = nil
+      state.win = nil
     end
   end
   shutdown(term)
@@ -382,8 +458,9 @@ function M.move(dest)
   if not source or not term or source == dest then
     return
   end
-  M.slots[source], M.slots[dest] = M.slots[dest], term
-  M.current = dest
+  local state = st()
+  state.slots[source], state.slots[dest] = state.slots[dest], term
+  state.current = dest
   vim.schedule(function()
     pcall(vim.cmd, "redrawtabline")
   end)
@@ -421,7 +498,7 @@ function M.winbar()
   local tabs = {}
   for _, e in ipairs(managed()) do
     local lbl = label(e.slot, e.term)
-    local hl = (e.slot == M.current) and "%#TabLineSel#" or "%#TabLine#"
+    local hl = (e.slot == st().current) and "%#TabLineSel#" or "%#TabLine#"
     tabs[#tabs + 1] = string.format("%%%d@v:lua.fishmonger_tab_click@%s%s%%X", e.slot, hl, lbl)
   end
   return table.concat(tabs) .. "%#TabLineFill#"
@@ -450,19 +527,47 @@ function M.setup(opts)
   -- TermRequest callback runs, so reading it synchronously sees the old value.
   vim.api.nvim_create_autocmd("TermRequest", {
     group = grp,
-    callback = function()
+    callback = function(args)
       pcall(vim.cmd, "redrawstatus")
-      vim.schedule(emit_tabs_changed)
+      -- Emit for the tabpage owning the buffer whose title changed, not the
+      -- current one: a shell in a background workspace still sets titles.
+      local _, _, _, tab = owner_of_buf(args.buf)
+      vim.schedule(function()
+        emit_tabs_changed(tab)
+      end)
     end,
   })
   -- Re-evaluate a function width when the screen resizes so the side window keeps
   -- its share. winfixwidth pins it against incidental splits, not VimResized.
+  -- Every tabpage's side window is resized, not just the visible one: an unseen
+  -- tabpage's window keeps its old width otherwise, and you'd only find out on
+  -- switching to it.
   vim.api.nvim_create_autocmd("VimResized", {
     group = grp,
     callback = function()
-      local win = viewport()
-      if win then
-        pcall(vim.api.nvim_win_set_width, win, want_width())
+      local width = want_width()
+      for _, state in pairs(states) do
+        if state.win and vim.api.nvim_win_is_valid(state.win) then
+          pcall(vim.api.nvim_win_set_width, state.win, width)
+        end
+      end
+    end,
+  })
+  -- Closing a tabpage closes its windows but leaves its terminal buffers alive --
+  -- and with the tabpage gone there is no longer any way to reach them. Shut the
+  -- shells down with the workspace rather than leaking orphaned ptys.
+  vim.api.nvim_create_autocmd("TabClosed", {
+    group = grp,
+    callback = function()
+      local doomed = {}
+      for tab, state in pairs(states) do
+        if not vim.api.nvim_tabpage_is_valid(tab) then
+          vim.list_extend(doomed, managed(state))
+          states[tab] = nil -- drop before shutdown: deleting the buffers fires
+        end -- TermClose, which must not find a dead tabpage's state
+      end
+      for _, e in ipairs(doomed) do
+        shutdown(e.term)
       end
     end,
   })
@@ -520,27 +625,33 @@ function M.setup_exit()
   vim.api.nvim_create_autocmd("TermClose", {
     group = vim.api.nvim_create_augroup("TermExit", { clear = true }),
     callback = function(args)
-      local slot = slot_of_buf(args.buf)
-      if not slot then
+      local state, slot, _, tab = owner_of_buf(args.buf)
+      if not state or not slot then
         return
       end
-      M.slots[slot] = nil
+      state.slots[slot] = nil
       vim.schedule(function()
-        local win = viewport()
-        if win and vim.api.nvim_win_get_buf(win) == args.buf then
-          local nxt = first_alive()
-          if nxt then
+        local win = state.win
+        if win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == args.buf then
+          local nxt, term = first_alive(state)
+          if not nxt then
+            pcall(vim.api.nvim_win_close, win, true)
+            state.win = nil
+          elseif tab == vim.api.nvim_get_current_tabpage() then
             M.show(nxt)
           else
-            pcall(vim.api.nvim_win_close, win, true)
-            M.win = nil
+            -- Another tabpage's terminal exited. Its replacement buffer already
+            -- exists, so swap it in without focusing -- M.show would drag us into
+            -- that tabpage (it sets the current window).
+            vim.api.nvim_win_set_buf(win, term.buf)
+            state.current = nxt
           end
         end
         -- Clean up the dead buffer ("[Process exited]").
         if vim.api.nvim_buf_is_valid(args.buf) then
           pcall(vim.api.nvim_buf_delete, args.buf, { force = true })
         end
-        emit_tabs_changed()
+        emit_tabs_changed(tab)
       end)
     end,
   })
