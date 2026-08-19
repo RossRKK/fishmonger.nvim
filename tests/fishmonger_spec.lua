@@ -17,6 +17,7 @@ local function fresh_terms()
   vim.fn.jobstart = function(cmd, opts) ---@diagnostic disable-line: duplicate-set-field, unused-local
     return 1
   end
+  pcall(vim.cmd, "tabonly") -- drop leftover tabpages (state is per-tabpage)
   pcall(vim.cmd, "only") -- collapse leftover split windows from a prior test
   package.loaded["fishmonger"] = nil
   return require("fishmonger")
@@ -282,6 +283,97 @@ describe("terms.toggle", function()
     terms.toggle()
     assert.same({ 1 }, slots_of(terms))
     assert.equals(1, open_slot(terms))
+  end)
+end)
+
+-- A tabpage is a workspace: slots, the shown tab and the side window are all
+-- per-tabpage, and terms.slots/current/win report the CURRENT tabpage's.
+describe("per-tabpage state", function()
+  local terms
+
+  before_each(function()
+    terms = fresh_terms()
+  end)
+
+  after_each(function()
+    pcall(vim.cmd, "tabonly")
+  end)
+
+  it("gives a new tabpage its own empty slots", function()
+    terms.show(1)
+    local first = terms.slots[1].buf
+
+    vim.cmd("tabnew")
+    assert.same({}, slots_of(terms))
+
+    terms.show(1)
+    assert.are_not.equals(first, terms.slots[1].buf)
+  end)
+
+  it("keeps each tabpage's terminals when switching between them", function()
+    terms.show(1)
+    local a = terms.slots[1].buf
+    vim.cmd("tabnew")
+    terms.show(1)
+    local b = terms.slots[1].buf
+
+    vim.cmd("tabprevious")
+    assert.equals(a, terms.slots[1].buf)
+    vim.cmd("tabnext")
+    assert.equals(b, terms.slots[1].buf)
+  end)
+
+  -- The regression that made tabpages unusable: nvim_win_is_valid is true for a
+  -- window in another tabpage, so a shared viewport made toggle/show focus the
+  -- OTHER tabpage's terminal -- teleporting you out of the project you were in.
+  it("opens its own side window instead of focusing another tabpage's", function()
+    terms.show(1)
+    local other_win = terms.win
+
+    vim.cmd("tabnew")
+    local tab = vim.api.nvim_get_current_tabpage()
+    terms.toggle()
+
+    assert.equals(tab, vim.api.nvim_get_current_tabpage())
+    assert.are_not.equals(other_win, terms.win)
+    assert.equals(tab, vim.api.nvim_win_get_tabpage(terms.win))
+  end)
+
+  -- Closing a tabpage closes its windows, but its terminal buffers would outlive
+  -- it with nothing left to reach them by -- so the shells go with the workspace.
+  -- terms.tabs(tab) is what lets config paint another workspace's status onto its
+  -- tabpage label, so it must answer for a tabpage you are not in -- and must not
+  -- silently answer about the current one for a tabpage with no terminals.
+  it("reports a given tabpage's terminals", function()
+    terms.show(1)
+    local first = vim.api.nvim_get_current_tabpage()
+    vim.cmd("tabnew")
+    local second = vim.api.nvim_get_current_tabpage()
+    terms.show(1)
+    terms.show(2)
+
+    assert.same({ 1 }, vim.tbl_map(function(t)
+      return t.slot
+    end, terms.tabs(first)))
+    assert.same({ 1, 2 }, vim.tbl_map(function(t)
+      return t.slot
+    end, terms.tabs(second)))
+
+    vim.cmd("tabnew")
+    assert.same({}, terms.tabs(vim.api.nvim_get_current_tabpage()))
+  end)
+
+  it("shuts down a closed tabpage's terminals", function()
+    terms.setup({})
+    vim.cmd("tabnew")
+    terms.show(1)
+    terms.show(2)
+    local bufs = { terms.slots[1].buf, terms.slots[2].buf }
+
+    vim.cmd("tabclose")
+    for _, buf in ipairs(bufs) do
+      assert.is_false(vim.api.nvim_buf_is_valid(buf))
+    end
   end)
 end)
 
