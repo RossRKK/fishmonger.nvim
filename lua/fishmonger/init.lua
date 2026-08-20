@@ -452,6 +452,15 @@ function M.agents()
   return out
 end
 
+--- Re-read the agent status files right now and repaint everything that shows
+--- them (statusline, tab labels, FishmongerAgentsChanged consumers). The fs
+--- watcher keeps the steady state current; this is the on-demand path for
+--- moments the list is about to be looked at -- a greeter coming back into
+--- view, regaining focus -- where a missed event must not show stale state.
+function M.refresh_agents()
+  agent.refresh()
+end
+
 --- The display name of a tabpage's project: its tab-local cwd's basename.
 --- Overridable via setup({ project_name = fn }) for a config that names
 --- workspaces itself.

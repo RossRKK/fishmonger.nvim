@@ -27,10 +27,18 @@ local M = {}
 --
 -- The glyphs are single-width so a row of them in a tab label costs one column
 -- each, and they stay distinguishable at a glance: a filled mark for "wants
--- you", a light one for "working", a tick for "finished".
+-- you", a gear for "working", a tick for "finished". NOT ✳ for working: that is
+-- the glyph Claude Code itself puts in its title when it has FINISHED, so the
+-- title-icon fallback (init.lua) shows it meaning "done" -- reusing it here for
+-- the opposite state made the two paths contradict each other.
 M.states = {
-  busy = { icon = "\xe2\x9c\xb3", hl = "DiagnosticInfo", label = "working" }, -- ✳
-  permission = { icon = "\xef\x8a\x9c", hl = "DiagnosticWarn", label = "permission", attention = true }, --
+  busy = { icon = "\xef\x80\x93", hl = "DiagnosticInfo", label = "working" }, --
+  permission = {
+    icon = "\xef\x8a\x9c",
+    hl = "DiagnosticWarn",
+    label = "permission",
+    attention = true,
+  }, --
   asking = { icon = "\xef\x81\x99", hl = "DiagnosticWarn", label = "question", attention = true }, --
   plan = { icon = "\xef\x80\xa2", hl = "DiagnosticWarn", label = "plan review", attention = true }, --
   asked = { icon = "\xef\x81\x99", hl = "DiagnosticHint", label = "follow-up", attention = true }, --
@@ -47,6 +55,10 @@ local config = {
 -- session id -> record, as read from disk:
 --   { session, state, detail, cwd, pids = {…}, agent_pid }
 local sessions = {}
+
+-- The on_change callback given to setup(), kept here so refresh() can repaint
+-- through the same path the watcher does.
+local notify = function() end
 
 -- Terminal shell pids, cached per buffer. Resolving one means reading /proc, and
 -- the tab strip asks on every repaint; a terminal's pid never changes, so once
@@ -146,7 +158,17 @@ function M.look(state)
   if not state then
     return nil
   end
-  return M.states[state] or { icon = "\xe2\x9c\xb3", hl = "DiagnosticInfo", label = state }
+  return M.states[state] or { icon = "\xef\x80\x93", hl = "DiagnosticInfo", label = state }
+end
+
+--- Re-read the status directory right now, synchronously, and repaint. The
+--- watcher keeps things current in the steady state; this is for the moments a
+--- consumer is about to put the list in front of the user (the popup opening, a
+--- greeter coming back into view) and a missed fs event must not be able to
+--- show stale state.
+function M.refresh()
+  reload()
+  notify()
 end
 
 --- Every known session, live agents only. Terminal-matching is the caller's job
@@ -163,6 +185,7 @@ end
 ---@param on_change fun() called, debounced, whenever the statuses change
 function M.setup(opts, on_change)
   config = vim.tbl_extend("force", config, opts or {})
+  notify = on_change
   if not config.enabled then
     return
   end
