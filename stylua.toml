@@ -1,0 +1,8 @@
+# Matches Neovim core's own stylua config. Without this file stylua defaults to
+# tabs at 120 columns, which is how lua/fishmonger/init.lua drifted to tab indent.
+# (Core also sets call_parentheses = "None"; this config always writes them.)
+column_width = 100
+indent_type = "Spaces"
+indent_width = 2
+quote_style = "AutoPreferDouble"
+call_parentheses = "Always"
