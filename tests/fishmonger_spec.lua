@@ -352,12 +352,18 @@ describe("per-tabpage state", function()
     terms.show(1)
     terms.show(2)
 
-    assert.same({ 1 }, vim.tbl_map(function(t)
-      return t.slot
-    end, terms.tabs(first)))
-    assert.same({ 1, 2 }, vim.tbl_map(function(t)
-      return t.slot
-    end, terms.tabs(second)))
+    assert.same(
+      { 1 },
+      vim.tbl_map(function(t)
+        return t.slot
+      end, terms.tabs(first))
+    )
+    assert.same(
+      { 1, 2 },
+      vim.tbl_map(function(t)
+        return t.slot
+      end, terms.tabs(second))
+    )
 
     vim.cmd("tabnew")
     assert.same({}, terms.tabs(vim.api.nvim_get_current_tabpage()))

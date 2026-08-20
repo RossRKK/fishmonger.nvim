@@ -646,10 +646,12 @@ local function truncate(s, n)
   return s
 end
 
--- A tab's title: the OSC title the running program set (b:term_title — Claude
--- Code updates this live, including its input-needed marker), falling back to
--- the foreground process name from /proc, then "term".
-local function label(slot, term)
+-- A tab's title text: the OSC title the running program set (b:term_title —
+-- Claude Code updates this live), falling back to the foreground process name
+-- from /proc, then "term". WITHOUT its leading status glyph: the strip renders
+-- the status itself (see M.winbar), so the raw glyph in the title would double
+-- it. Escaped because it lands in a winbar %-expression verbatim.
+local function tab_name(term)
   local name = term_title(term)
   if not name then
     local pid, tpgid = term_procs(term)
@@ -659,7 +661,20 @@ local function label(slot, term)
       name = comm and (comm:gsub("%s+$", "")) or nil
     end
   end
-  return string.format(" %d:%s ", slot, truncate(name or "term", 24))
+  return (truncate(strip_icon(name or "term"), 24):gsub("%%", "%%%%"))
+end
+
+-- The highlight group for a status icon on the tab strip: the state's colour
+-- (its look hl, e.g. DiagnosticWarn) over the tab's own background, which
+-- differs between the active tab and the rest. Re-derived on every repaint
+-- rather than cached, so it follows colorscheme changes for free.
+local function icon_hl(hl, base)
+  local name = "Fishmonger" .. base .. hl:gsub("%W", "")
+  vim.api.nvim_set_hl(0, name, {
+    fg = vim.api.nvim_get_hl(0, { name = hl, link = false }).fg,
+    bg = vim.api.nvim_get_hl(0, { name = base, link = false }).bg,
+  })
+  return name
 end
 
 -- The tmux-style tab strip, as a window-local winbar on the side window. Because
@@ -667,12 +682,24 @@ end
 -- screen-column math, and no commandeering the global tabline. The active tab is
 -- highlighted; the trailing TabLineFill extends to the window's right edge. Each
 -- label is a mouse-click target routing to fishmonger_tab_click.
+--
+-- Each tab shows its terminal's status icon in that state's colour -- the same
+-- icon-and-highlight the agent view resolves (agent state first, OSC-title
+-- glyph as fallback). A terminal with no status to show (a plain shell) gets no
+-- icon at all rather than a placeholder.
 function M.winbar()
   local tabs = {}
   for _, e in ipairs(managed()) do
-    local lbl = label(e.slot, e.term)
-    local hl = (e.slot == st().current) and "%#TabLineSel#" or "%#TabLine#"
-    tabs[#tabs + 1] = string.format("%%%d@v:lua.fishmonger_tab_click@%s%s%%X", e.slot, hl, lbl)
+    local base = (e.slot == st().current) and "TabLineSel" or "TabLine"
+    local icon, hl = status_icon(e.term, term_title(e.term))
+    local status = ""
+    if icon and hl then
+      status = ("%%#%s#%s%%#%s# "):format(icon_hl(hl, base), icon, base)
+    elseif icon then
+      status = icon .. " "
+    end
+    local lbl = (" %d:%s%s "):format(e.slot, status, tab_name(e.term))
+    tabs[#tabs + 1] = ("%%%d@v:lua.fishmonger_tab_click@%%#%s#%s%%X"):format(e.slot, base, lbl)
   end
   return table.concat(tabs) .. "%#TabLineFill#"
 end
@@ -707,6 +734,20 @@ function M.setup(opts)
       pattern = "FishmongerAgentsChanged",
       data = { agents = M.agents() },
     })
+    for tab in pairs(states) do
+      if vim.api.nvim_tabpage_is_valid(tab) then
+        emit_tabs_changed(tab)
+      end
+    end
+  end, function()
+    -- A spinner frame advance is not a state change: repaint the strips that
+    -- draw the icon (the winbar, and the tab labels via FishmongerTabsChanged)
+    -- without announcing FishmongerAgentsChanged -- consumers that re-render a
+    -- whole view on that would fight the cursor several times a second for a
+    -- frame nobody is blocked on. Consumers that can repaint cheaply (or know
+    -- when it's safe) get their own event instead.
+    pcall(vim.cmd, "redrawstatus")
+    vim.api.nvim_exec_autocmds("User", { pattern = "FishmongerAgentsTick" })
     for tab in pairs(states) do
       if vim.api.nvim_tabpage_is_valid(tab) then
         emit_tabs_changed(tab)
