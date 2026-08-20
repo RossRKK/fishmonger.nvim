@@ -46,6 +46,13 @@ local config = {
   filetype = "fishmonger",
   -- Shell command to spawn in each terminal. Defaults to the user's shell.
   shell = vim.o.shell,
+  -- Agent status tracking (lua/fishmonger/agent.lua): `{ dir = <status
+  -- directory>, enabled = <bool> }`. Nil takes that module's defaults.
+  agent = nil,
+  -- How a tabpage's project is named in the agent view. Nil uses the basename
+  -- of its cwd; a config that names workspaces itself passes its own.
+  ---@type nil|fun(tab: integer): string
+  project_name = nil,
 }
 
 -- Resolve the configured width to a column count.
@@ -242,21 +249,28 @@ local function read_file(path)
   return data
 end
 
--- Resolve a terminal's shell pid and its controlling-terminal foreground
--- process group (tpgid, field 8 of /proc/<pid>/stat — the fields after the
--- "(comm)" are [1]=state [2]=ppid [3]=pgrp [4]=session [5]=tty_nr [6]=tpgid).
-local function term_procs(term)
-  if not term or not term.buf or not vim.api.nvim_buf_is_valid(term.buf) then
+-- The pid of the shell a terminal buffer is running. Shared with the agent
+-- module, which matches a session's ancestor chain against it.
+local function shell_pid(buf)
+  if not (buf and vim.api.nvim_buf_is_valid(buf)) then
     return nil
   end
   local ok, jid = pcall(function()
-    return vim.b[term.buf].terminal_job_id
+    return vim.b[buf].terminal_job_id
   end)
   if not ok or type(jid) ~= "number" then
     return nil
   end
   local ok2, pid = pcall(vim.fn.jobpid, jid)
-  if not ok2 or type(pid) ~= "number" then
+  return ok2 and type(pid) == "number" and pid or nil
+end
+
+-- Resolve a terminal's shell pid and its controlling-terminal foreground
+-- process group (tpgid, field 8 of /proc/<pid>/stat — the fields after the
+-- "(comm)" are [1]=state [2]=ppid [3]=pgrp [4]=session [5]=tty_nr [6]=tpgid).
+local function term_procs(term)
+  local pid = term and shell_pid(term.buf)
+  if not pid then
     return nil
   end
   local stat = read_file("/proc/" .. pid .. "/stat")
@@ -295,12 +309,63 @@ function M.title_icon(title)
   end
 end
 
---- A tabpage's side terminals, in slot order, as { slot = n, title = <b:term_title
---- or nil> }. Public so consumers can ask about a tabpage they aren't in --
+local agent = require("fishmonger.agent")
+
+--- The agent status of a terminal: the record the hook wrote, plus its `look`
+--- (icon/hl/label/attention). Nil when nothing is reporting from that terminal.
+---@param term table?
+---@return table?
+local function term_agent(term)
+  if not (term and term.buf and vim.api.nvim_buf_is_valid(term.buf)) then
+    return nil
+  end
+  local record = agent.for_buf(term.buf, shell_pid)
+  if not record then
+    return nil
+  end
+  return vim.tbl_extend("force", record, { look = agent.look(record.state) })
+end
+
+--- The status glyph for a terminal: the agent's reported state if one is
+--- reporting, else the leading glyph of its OSC title. The fallback matters for
+--- everything that isn't a hook-wired agent -- another agent CLI, a long build
+--- that sets its own title -- which the tab strip showed before this module
+--- existed and should keep showing.
+---@param term table?
+---@param title string?
+---@return string? icon, string? hl
+local function status_icon(term, title)
+  local status = term_agent(term)
+  if status and status.look then
+    return status.look.icon, status.look.hl
+  end
+  return M.title_icon(title)
+end
+
+-- A title with its leading status glyph (and the space after it) removed, for
+-- somewhere that renders the status itself. Titles without one are returned as
+-- they are.
+local function strip_icon(title)
+  local icon = M.title_icon(title)
+  if not icon then
+    return title
+  end
+  return (title:sub(#icon + 1):gsub("^%s+", ""))
+end
+
+--- A tabpage's side terminals, in slot order, as
+---   { slot = n, title = <b:term_title or nil>, icon = <status glyph or nil>,
+---     hl = <highlight for icon>, agent = <status record or nil> }
+--- Public so consumers can ask about a tabpage they aren't in --
 --- FishmongerTabsChanged says which one changed, and answering "what is every
 --- workspace's state" then needs a query, not just the event.
+---
+--- `icon` is what a tab label or an OS title wants: already resolved from the
+--- agent status with the OSC-title glyph as fallback, so a consumer doesn't
+--- reimplement that precedence. `agent` is there for the ones that want more
+--- than a glyph (the agent view's state name and pending prompt).
 ---@param tab? integer tabpage handle (default: current)
----@return { slot: integer, title: string? }[]
+---@return { slot: integer, title: string?, icon: string?, hl: string?, agent: table? }[]
 function M.tabs(tab)
   local state = tab and states[tab] or (tab == nil and st())
   if not state then
@@ -308,9 +373,108 @@ function M.tabs(tab)
   end
   local out = {}
   for _, e in ipairs(managed(state)) do
-    out[#out + 1] = { slot = e.slot, title = term_title(e.term) }
+    local title = term_title(e.term)
+    local icon, hl = status_icon(e.term, title)
+    out[#out + 1] = {
+      slot = e.slot,
+      title = title,
+      icon = icon,
+      hl = hl,
+      agent = term_agent(e.term),
+    }
   end
   return out
+end
+
+--- Every reporting agent across every tabpage, for the agent view (and anything
+--- else that wants a fleet-wide answer rather than a per-tabpage one).
+---
+--- Entries are `{ tab, slot, project, title, state, look, detail, cwd, session,
+--- current }`. `title` is the terminal's own OSC title -- what the agent calls
+--- what it is doing, which is the only per-terminal identity there is once a
+--- workspace has several agents in it. `tab`/`slot` are nil for a session
+--- running somewhere fishmonger
+--- doesn't manage -- a bare terminal, another nvim -- which is still worth
+--- listing (it is still an agent waiting on you) but cannot be jumped to.
+---@return table[]
+function M.agents()
+  local seen, out = {}, {}
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    local state = states[tab]
+    for _, e in ipairs(state and managed(state) or {}) do
+      local status = term_agent(e.term)
+      if status then
+        seen[status.session] = true
+        out[#out + 1] = {
+          tab = tab,
+          slot = e.slot,
+          project = M.project_name(tab),
+          -- Without its leading status glyph: the view draws the state itself,
+          -- from a source that knows more than the glyph does, and two status
+          -- marks per row that can disagree is worse than one.
+          title = strip_icon(term_title(e.term)),
+          state = status.state,
+          look = status.look,
+          detail = status.detail,
+          cwd = status.cwd,
+          session = status.session,
+          current = tab == vim.api.nvim_get_current_tabpage() and e.slot == state.current,
+        }
+      end
+    end
+  end
+  for _, record in ipairs(agent.all()) do
+    if not seen[record.session] then
+      out[#out + 1] = {
+        project = vim.fn.fnamemodify(record.cwd or "", ":t"),
+        state = record.state,
+        look = agent.look(record.state),
+        detail = record.detail,
+        cwd = record.cwd,
+        session = record.session,
+      }
+    end
+  end
+  -- Whoever is blocked comes first: the list exists to be acted on, and the
+  -- entries that need acting on should not be hunted for. Ties keep a stable
+  -- order (project, then slot) so the list doesn't reshuffle under the cursor.
+  table.sort(out, function(a, b)
+    local pa = (a.look and a.look.attention) and 0 or 1
+    local pb = (b.look and b.look.attention) and 0 or 1
+    if pa ~= pb then
+      return pa < pb
+    end
+    if a.project ~= b.project then
+      return (a.project or "") < (b.project or "")
+    end
+    return (a.slot or 0) < (b.slot or 0)
+  end)
+  return out
+end
+
+--- The display name of a tabpage's project: its tab-local cwd's basename.
+--- Overridable via setup({ project_name = fn }) for a config that names
+--- workspaces itself.
+---@param tab integer
+---@return string
+function M.project_name(tab)
+  if config.project_name then
+    return config.project_name(tab)
+  end
+  return vim.fn.fnamemodify(vim.fn.getcwd(-1, vim.api.nvim_tabpage_get_number(tab)), ":t")
+end
+
+--- Focus an agent: switch to its tabpage and bring its terminal into the side
+--- window. The one action the agent view needs, and the reason the view belongs
+--- here rather than in a consumer -- crossing tabpages is fishmonger's business.
+---@param entry table an entry from M.agents()
+function M.focus(entry)
+  if not (entry and entry.tab and vim.api.nvim_tabpage_is_valid(entry.tab)) then
+    return false
+  end
+  vim.api.nvim_set_current_tabpage(entry.tab)
+  M.show(entry.slot)
+  return true
 end
 
 -- Announce a tabpage's tab set whenever it (or a tab's title) changes, as a
@@ -521,6 +685,25 @@ function M.setup(opts)
   config = vim.tbl_extend("force", config, opts or {})
 
   local grp = vim.api.nvim_create_augroup("Fishmonger", { clear = true })
+
+  -- Agent statuses arrive from outside nvim entirely (a hook process writing a
+  -- file), so they get their own watcher rather than an autocmd. A change is
+  -- announced twice on purpose: `FishmongerAgentsChanged` for consumers that
+  -- want the fleet-wide list, and the per-tabpage FishmongerTabsChanged that
+  -- glyph consumers (tab labels, the OS title) already listen to -- their input
+  -- changed even though no terminal did.
+  agent.setup(config.agent, function()
+    pcall(vim.cmd, "redrawstatus")
+    vim.api.nvim_exec_autocmds("User", {
+      pattern = "FishmongerAgentsChanged",
+      data = { agents = M.agents() },
+    })
+    for tab in pairs(states) do
+      if vim.api.nvim_tabpage_is_valid(tab) then
+        emit_tabs_changed(tab)
+      end
+    end
+  end)
   -- term_title changes arrive via TermRequest (Claude Code updates it live,
   -- including its input-needed marker); repaint the winbar and re-bubble the
   -- OS title on those. Defer the bubble: b:term_title is applied after the
@@ -594,6 +777,13 @@ function M.setup_keymaps()
       M.show(tonumber(key))
     elseif key == "c" then
       M.new()
+    elseif key == "a" then
+      -- The agent view (lua/fishmonger/view.lua): every agent in every
+      -- workspace, blocked ones first. On the prefix rather than its own ctrl
+      -- key because the moment you want it is while sitting in a terminal
+      -- waiting on an agent, where the free keys are the ones already routed
+      -- through here.
+      require("fishmonger.view").popup()
     elseif key == "&" then
       M.kill()
     elseif key == "." then
@@ -613,7 +803,7 @@ function M.setup_keymaps()
     { "n", "t" },
     "<C-b>",
     tab_prefix,
-    { desc = "Terminal prefix (<C-b>N tab / <C-b>c new / <C-b>& kill / <C-b>. move)" }
+    { desc = "Terminal prefix (<C-b>N tab / c new / & kill / . move / a agents)" }
   )
 end
 
@@ -630,6 +820,7 @@ function M.setup_exit()
         return
       end
       state.slots[slot] = nil
+      agent.forget(args.buf) -- its cached shell pid is about to be reused by someone else
       vim.schedule(function()
         local win = state.win
         if win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == args.buf then
