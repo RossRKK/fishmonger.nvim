@@ -81,16 +81,11 @@ local function truncate(s, n)
   return s
 end
 
---- The floating-window rendering: the same rows, on demand, from anywhere.
---- The row's key jumps to it and closes the window; so does <CR> on the line the
---- cursor is on. q/<Esc> dismiss.
-function M.popup()
-  local rows = M.items()
-  if #rows == 0 then
-    vim.notify("no agents running", vim.log.levels.INFO)
-    return
-  end
-
+--- The lines and highlight spans for a set of rows, plus the width they need.
+--- Pure, so the popup can re-run it when the agents change under it.
+---@param rows table[]
+---@return string[] lines, table[] highlights, integer width
+local function layout(rows)
   local width = 0
   local lines, highlights = {}, {}
   for i, row in ipairs(rows) do
@@ -113,28 +108,66 @@ function M.popup()
       highlights[#highlights + 1] = { i - 1, 5, 5 + #row.icon, row.hl }
     end
   end
+  return lines, highlights, width
+end
+
+--- The floating-window rendering: the same rows, on demand, from anywhere.
+--- The row's key jumps to it and closes the window; so does <CR> on the line the
+--- cursor is on. q/<Esc> dismiss. Repaints itself while open: an agent flipping
+--- from working to blocked is exactly what this list is for, and it would
+--- otherwise show the state from the moment it opened.
+function M.popup()
+  -- The user is about to read this list; a missed fs event must not be able to
+  -- show yesterday's state, so re-read the files rather than trust the cache.
+  require("fishmonger.agent").refresh()
+  local rows = M.items()
+  if #rows == 0 then
+    vim.notify("no agents running", vim.log.levels.INFO)
+    return
+  end
 
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  local ns = vim.api.nvim_create_namespace("fishmonger_agents")
-  for _, hl in ipairs(highlights) do
-    pcall(vim.api.nvim_buf_set_extmark, buf, ns, hl[1], hl[2], { end_col = hl[3], hl_group = hl[4] })
-  end
-  vim.bo[buf].modifiable = false
   vim.bo[buf].filetype = "fishmonger_agents"
+  local ns = vim.api.nvim_create_namespace("fishmonger_agents")
+  local win
 
-  local win = vim.api.nvim_open_win(buf, true, {
-    relative = "editor",
-    width = math.min(width, vim.o.columns - 4),
-    height = #lines,
-    row = math.floor((vim.o.lines - #lines) / 2) - 1,
-    col = math.floor((vim.o.columns - width) / 2),
-    style = "minimal",
-    border = "rounded",
-    title = " agents ",
-    title_pos = "center",
-  })
-  vim.wo[win].cursorline = true
+  -- (Re)fill the buffer and size the window to fit. Called at open and again on
+  -- every agents change while the popup is up.
+  local function render()
+    local lines, highlights, width = layout(rows)
+    vim.bo[buf].modifiable = true
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.bo[buf].modifiable = false
+    vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+    for _, hl in ipairs(highlights) do
+      pcall(
+        vim.api.nvim_buf_set_extmark,
+        buf,
+        ns,
+        hl[1],
+        hl[2],
+        { end_col = hl[3], hl_group = hl[4] }
+      )
+    end
+    local config = {
+      relative = "editor",
+      width = math.min(width, vim.o.columns - 4),
+      height = #lines,
+      row = math.floor((vim.o.lines - #lines) / 2) - 1,
+      col = math.floor((vim.o.columns - width) / 2),
+      style = "minimal",
+      border = "rounded",
+      title = " agents ",
+      title_pos = "center",
+    }
+    if win then
+      vim.api.nvim_win_set_config(win, config)
+    else
+      win = vim.api.nvim_open_win(buf, true, config)
+      vim.wo[win].cursorline = true
+    end
+  end
+  render()
 
   local function close()
     if vim.api.nvim_win_is_valid(win) then
@@ -150,12 +183,16 @@ function M.popup()
     end
   end
 
-  for _, row in ipairs(rows) do
-    if row.key then
-      vim.keymap.set("n", row.key, function()
+  -- Keys are bound by POSITION, not to a row captured at open: a repaint can
+  -- reorder the list (blocked agents sort to the top), and a key must always do
+  -- what the visible line next to it says.
+  for i = 1, vim.fn.strchars(KEYS) do
+    vim.keymap.set("n", vim.fn.strcharpart(KEYS, i - 1, 1), function()
+      local row = rows[i]
+      if row and row.key then
         pick(row)
-      end, { buffer = buf, nowait = true })
-    end
+      end
+    end, { buffer = buf, nowait = true })
   end
   vim.keymap.set("n", "<CR>", function()
     pick(rows[vim.api.nvim_win_get_cursor(win)[1]])
@@ -165,6 +202,24 @@ function M.popup()
   end
   -- Leaving the window is a dismissal too: it's a chooser, not a panel.
   vim.api.nvim_create_autocmd("WinLeave", { buffer = buf, once = true, callback = close })
+
+  -- Live repaint: the whole point of the list is agents changing state on their
+  -- own, so it cannot freeze at open time. The autocmd dies with the buffer
+  -- (buffer-scoped scratch buffer, wiped on close).
+  vim.api.nvim_create_autocmd("User", {
+    pattern = "FishmongerAgentsChanged",
+    callback = function()
+      if not (vim.api.nvim_buf_is_valid(buf) and win and vim.api.nvim_win_is_valid(win)) then
+        return true -- popup is gone; drop the listener
+      end
+      rows = M.items()
+      if #rows == 0 then
+        close()
+        return true
+      end
+      render()
+    end,
+  })
 end
 
 return M
