@@ -81,25 +81,44 @@ local function truncate(s, n)
   return s
 end
 
+--- Pad `s` to display width `w`. By DISPLAY width, not %-Ns: the cells hold
+--- multibyte glyphs and project names, and string.format counts bytes, which
+--- would stagger every column after them.
+---@param s string
+---@param w integer
+---@return string
+local function pad(s, w)
+  return s .. (" "):rep(math.max(0, w - vim.fn.strdisplaywidth(s)))
+end
+
 --- The lines and highlight spans for a set of rows, plus the width they need.
 --- Pure, so the popup can re-run it when the agents change under it.
+---
+--- Rendered as a table -- key · glyph · project · title · what it wants --
+--- with each column padded to its widest cell across ALL rows, so the columns
+--- line up down the list instead of each row's title starting wherever its
+--- project name ends. A column nobody fills (no titles, say) takes no width.
 ---@param rows table[]
 ---@return string[] lines, table[] highlights, integer width
 local function layout(rows)
+  local project_w, title_w = 0, 0
+  for _, row in ipairs(rows) do
+    project_w = math.max(project_w, vim.fn.strdisplaywidth(row.project or "?"))
+    title_w = math.max(title_w, vim.fn.strdisplaywidth(truncate(row.title or "", 28)))
+  end
   local width = 0
   local lines, highlights = {}, {}
   for i, row in ipairs(rows) do
-    -- key · glyph · where it is (project, and the terminal's title when that
-    -- says something the project name doesn't) · what it wants.
-    local where = row.project or "?"
-    if row.title then
-      where = where .. "  " .. truncate(row.title, 28)
+    local cells = {
+      row.key or " ",
+      row.icon,
+      pad(row.project or "?", project_w),
+    }
+    if title_w > 0 then
+      cells[#cells + 1] = pad(truncate(row.title or "", 28), title_w)
     end
-    local head = ("  %s  %s  %s"):format(row.key or " ", row.icon, where)
-    -- Padded by DISPLAY width, not by %-Ns: the glyphs are multibyte, and
-    -- string.format counts bytes, which would stagger the second column.
-    local pad = math.max(1, 46 - vim.fn.strdisplaywidth(head))
-    local line = head .. (" "):rep(pad) .. truncate(row.detail or row.state or "", 60)
+    cells[#cells + 1] = truncate(row.detail or row.state or "", 60)
+    local line = ("  " .. table.concat(cells, "  ")):gsub("%s+$", "")
     lines[#lines + 1] = line
     width = math.max(width, vim.fn.strchars(line) + 2)
     -- Colour the glyph by state, and the key by "this is what you press".
