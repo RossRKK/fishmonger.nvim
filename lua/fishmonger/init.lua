@@ -326,11 +326,27 @@ local function term_agent(term)
   return vim.tbl_extend("force", record, { look = agent.look(record.state) })
 end
 
+-- Claude Code's own title glyphs: ✳ when waiting for input, the rest frames of
+-- its thinking spinner. A claude with no hook-reported status yet (a fresh
+-- instance hasn't run any hook) would otherwise leak these through the fallback
+-- below and clash with the icons every reporting agent gets; they carry no
+-- information the agent status won't report better, so they are dropped.
+local claude_glyphs = {
+  ["✳"] = true,
+  ["✢"] = true,
+  ["✶"] = true,
+  ["✻"] = true,
+  ["✽"] = true,
+  ["·"] = true,
+}
+
 --- The status glyph for a terminal: the agent's reported state if one is
---- reporting, else the leading glyph of its OSC title. The fallback matters for
---- everything that isn't a hook-wired agent -- another agent CLI, a long build
---- that sets its own title -- which the tab strip showed before this module
---- existed and should keep showing.
+--- reporting, else the leading glyph of its OSC title. A glyph recognised as
+--- Claude Code's own is dropped instead, so a claude that hasn't reported yet
+--- shows no icon rather than a stray one. The raw fallback matters for
+--- everything else that isn't a hook-wired agent -- another agent CLI, a long
+--- build that sets its own title -- which the tab strip showed before this
+--- module existed and should keep showing.
 ---@param term table?
 ---@param title string?
 ---@return string? icon, string? hl
@@ -339,7 +355,11 @@ local function status_icon(term, title)
   if status and status.look then
     return status.look.icon, status.look.hl
   end
-  return M.title_icon(title)
+  local icon = M.title_icon(title)
+  if icon and claude_glyphs[icon] then
+    return nil
+  end
+  return icon
 end
 
 -- A title with its leading status glyph (and the space after it) removed, for
