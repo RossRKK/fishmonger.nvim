@@ -66,9 +66,11 @@ agent that writes the same shape works.
 | `tabs(tab?)`                   | A tabpage's terminals as `{ slot, title, icon, hl, agent }`. `icon` is the status glyph: the agent's reported state, else the OSC title's leading glyph. |
 | `agents()`                     | Every reporting agent across every tabpage, blocked ones first. |
 | `focus(entry)`                 | Switch to an `agents()` entry's tabpage and surface its terminal. |
+| `transfer(tab)`                | Carry the current terminal (live process, scrollback and all) into tabpage `tab`'s lowest free slot and follow it. The process's cwd does not change. |
+| `transfer_pick()`              | `<C-b>m`: `vim.ui.select` over the other tabpages by project name, then `transfer`. |
 | `view.items()` / `view.popup()`| The agent view as data / as a floating chooser. |
 
-See the source for the full slot API (new / move / toggle / kill).
+See the source for the full slot API (new / move / transfer / toggle / kill).
 
 ## Tests
 

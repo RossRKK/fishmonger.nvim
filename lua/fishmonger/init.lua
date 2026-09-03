@@ -5,7 +5,10 @@
 -- or the <C-n> map): <C-b>{1-9} switches to (creating on demand) a terminal,
 -- <C-b>c opens the next free slot, <C-b>& kills the current terminal (tmux
 -- kill-window), and <C-b>.{1-9} renumbers the current terminal to another slot
--- (tmux move-window). <C-t> toggles the side slot from anywhere.
+-- (tmux move-window), and <C-b>m{1-9} carries the current terminal over to
+-- another workspace tabpage, picked by project name (tmux move-window -t
+-- other-session). <C-t> toggles
+-- the side slot from anywhere.
 --
 -- Model (the tmux-pane model): a SINGLE side window (M.win) lives in the right
 -- slot, and switching tabs swaps which terminal buffer that window shows --
@@ -659,6 +662,103 @@ function M.move(dest)
   end)
 end
 
+-- <C-b>m: carry the current side terminal into another tabpage (tmux
+-- move-window -t <session>). The live buffer is what moves -- the shell, its
+-- job and its scrollback are untouched -- so a Claude Code conversation that
+-- has wandered into another worktree can be filed under that worktree's
+-- workspace and reviewed from there without switching tabpages every time.
+--
+-- The process itself does NOT follow: its cwd stays wherever it was launched,
+-- and fishmonger makes no attempt to tell it otherwise. The terminal takes the
+-- lowest free slot in `dest` (never clobbering one there), the source viewport
+-- is repaired exactly as after a kill, and we follow the terminal so it lands
+-- on screen. The side windows share one width, so the pty sees no resize.
+--
+-- `dest` is a tabpage HANDLE; the keymap goes through M.transfer_pick.
+function M.transfer(dest)
+  if not (dest and vim.api.nvim_tabpage_is_valid(dest)) then
+    return false
+  end
+  local source_tab = vim.api.nvim_get_current_tabpage()
+  if dest == source_tab then
+    return false
+  end
+  local source = st()
+  local slot, term = current_target()
+  if not slot or not term then
+    return false
+  end
+
+  local target = st(dest)
+  local free
+  for i = BASE, MAX do
+    if not target.slots[i] then
+      free = i
+      break
+    end
+  end
+  if not free then
+    vim.notify("all " .. MAX .. " terminal slots in use there", vim.log.levels.WARN)
+    return false
+  end
+
+  -- Detach from the source first: if it is the one on screen, surface another
+  -- tab (or close the panel) BEFORE the buffer leaves, as M.kill does, so the
+  -- window never shows a non-terminal buffer for an adopting layout manager to
+  -- eject.
+  source.slots[slot] = nil
+  local win = viewport()
+  if win and vim.api.nvim_win_get_buf(win) == term.buf then
+    local nxt = first_alive(source)
+    if nxt then
+      M.show(nxt, { insert = false })
+    else
+      pcall(vim.api.nvim_win_close, win, true)
+      source.win = nil
+    end
+  end
+  emit_tabs_changed(source_tab)
+
+  target.slots[free] = term
+  target.current = free
+  vim.api.nvim_set_current_tabpage(dest)
+  M.show(free) -- opens dest's panel if it was closed; else swaps the buffer in
+  return true
+end
+
+-- <C-b>m: choose the destination tabpage for M.transfer by project name
+-- (M.project_name, so a config that names workspaces by repo + worktree gets
+-- those names). The current tabpage is left out -- there is nowhere to move
+-- within it -- and with no other tabpage at all we say so instead of opening
+-- an empty chooser. Bails early if nothing is open to move.
+function M.transfer_pick()
+  local slot = current_target()
+  if not slot then
+    return
+  end
+  local current = vim.api.nvim_get_current_tabpage()
+  local choices = {}
+  for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+    if tab ~= current then
+      choices[#choices + 1] = { tab = tab, name = M.project_name(tab) }
+    end
+  end
+  if #choices == 0 then
+    vim.notify("no other workspace to move the terminal to", vim.log.levels.WARN)
+    return
+  end
+  vim.ui.select(choices, {
+    prompt = "Move terminal to workspace",
+    format_item = function(item)
+      return item.name
+    end,
+  }, function(choice)
+    if choice then
+      M.transfer(choice.tab)
+    end
+  end)
+end
+
 local function truncate(s, n)
   if vim.fn.strchars(s) > n then
     return vim.fn.strcharpart(s, 0, n - 1) .. "…"
@@ -862,6 +962,10 @@ function M.setup_keymaps()
       if ok2 and dest:match("^[1-9]$") then
         M.move(tonumber(dest))
       end
+    elseif key == "m" then
+      -- Carry the terminal to another workspace, chosen by project name: you
+      -- think of tabpages as "which repo / worktree", not by their number.
+      M.transfer_pick()
     elseif vim.api.nvim_get_mode().mode:sub(1, 1) == "n" then
       -- Not one of ours: replay the raw <C-b> + key unmapped ("n") so the
       -- builtin scroll-back (and whatever the key does) still happens.
@@ -873,7 +977,7 @@ function M.setup_keymaps()
     { "n", "t" },
     "<C-b>",
     tab_prefix,
-    { desc = "Terminal prefix (<C-b>N tab / c new / & kill / . move / a agents)" }
+    { desc = "Terminal prefix (<C-b>N tab / c new / & kill / . move / m to workspace / a agents)" }
   )
 end
 
