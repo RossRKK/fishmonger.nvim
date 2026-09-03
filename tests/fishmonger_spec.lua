@@ -383,6 +383,150 @@ describe("per-tabpage state", function()
   end)
 end)
 
+-- Carrying a live terminal to another tabpage (tmux move-window -t). The buffer
+-- is the identity: the same bufnr must turn up in the destination's slots, and
+-- the source must be left as if that tab had been killed.
+describe("terms.transfer", function()
+  local terms
+
+  before_each(function()
+    terms = fresh_terms()
+    vim.notify = function(msg, level) end ---@diagnostic disable-line: duplicate-set-field, unused-local
+  end)
+
+  --- Open a second tabpage and return { source, dest } handles, ending in source.
+  local function two_tabs()
+    local source = vim.api.nvim_get_current_tabpage()
+    vim.cmd("tabnew")
+    local dest = vim.api.nvim_get_current_tabpage()
+    vim.api.nvim_set_current_tabpage(source)
+    return source, dest
+  end
+
+  it("moves the shown terminal's buffer into the destination and follows it", function()
+    local source, dest = two_tabs()
+    terms.show(2)
+    local buf = terms.slots[2].buf
+
+    assert.is_true(terms.transfer(dest))
+
+    assert.equals(dest, vim.api.nvim_get_current_tabpage())
+    assert.same({ 1 }, slots_of(terms)) -- lowest free slot there, not slot 2
+    assert.equals(buf, terms.slots[1].buf)
+    assert.equals(1, open_slot(terms))
+    assert.is_true(vim.api.nvim_buf_is_valid(buf))
+
+    vim.api.nvim_set_current_tabpage(source)
+    assert.same({}, slots_of(terms))
+    assert.is_nil(terms.win)
+  end)
+
+  it("surfaces another source tab when one remains", function()
+    local source, dest = two_tabs()
+    terms.show(1)
+    terms.show(2)
+    local moved = terms.slots[2].buf
+
+    terms.transfer(dest)
+
+    vim.api.nvim_set_current_tabpage(source)
+    assert.same({ 1 }, slots_of(terms))
+    assert.equals(1, open_slot(terms))
+    assert.are_not.equals(moved, terms.slots[1].buf)
+  end)
+
+  it("takes the lowest free slot without clobbering the destination's tabs", function()
+    local source, dest = two_tabs()
+    vim.api.nvim_set_current_tabpage(dest)
+    terms.show(1)
+    terms.show(3)
+    local kept1, kept3 = terms.slots[1].buf, terms.slots[3].buf
+    vim.api.nvim_set_current_tabpage(source)
+    terms.show(1)
+    local moved = terms.slots[1].buf
+
+    terms.transfer(dest)
+
+    assert.same({ 1, 2, 3 }, slots_of(terms))
+    assert.equals(kept1, terms.slots[1].buf)
+    assert.equals(moved, terms.slots[2].buf)
+    assert.equals(kept3, terms.slots[3].buf)
+    assert.equals(2, open_slot(terms))
+  end)
+
+  it("refuses the current tabpage, an invalid tabpage, and an empty panel", function()
+    local _, dest = two_tabs()
+    assert.is_false(terms.transfer(dest)) -- nothing open to move
+    terms.show(1)
+    assert.is_false(terms.transfer(vim.api.nvim_get_current_tabpage()))
+    assert.is_false(terms.transfer(nil))
+    assert.is_false(terms.transfer(99999))
+    assert.same({ 1 }, slots_of(terms))
+  end)
+
+  it("picks the destination by project name, leaving the current tabpage out", function()
+    local source, dest = two_tabs()
+    terms.setup({
+      project_name = function(tab)
+        return tab == dest and "repo-y" or "repo-x"
+      end,
+    })
+    terms.show(1)
+    local buf = terms.slots[1].buf
+    local offered
+    vim.ui.select = function(items, opts, on_choice) ---@diagnostic disable-line: duplicate-set-field
+      offered = {}
+      for _, item in ipairs(items) do
+        offered[#offered + 1] = opts.format_item(item)
+      end
+      on_choice(items[1])
+    end
+
+    terms.transfer_pick()
+
+    assert.same({ "repo-y" }, offered)
+    assert.equals(dest, vim.api.nvim_get_current_tabpage())
+    assert.equals(buf, terms.slots[1].buf)
+  end)
+
+  it("warns instead of opening a picker when there is no other tabpage", function()
+    terms.show(1)
+    local warned
+    vim.notify = function(msg)
+      warned = msg
+    end ---@diagnostic disable-line: duplicate-set-field
+    local opened = false
+    vim.ui.select = function()
+      opened = true
+    end ---@diagnostic disable-line: duplicate-set-field
+
+    terms.transfer_pick()
+
+    assert.matches("no other workspace", warned)
+    assert.is_false(opened)
+  end)
+
+  it("warns and leaves both tabpages alone when the destination is full", function()
+    local source, dest = two_tabs()
+    vim.api.nvim_set_current_tabpage(dest)
+    for i = 1, 9 do
+      terms.show(i)
+    end
+    vim.api.nvim_set_current_tabpage(source)
+    terms.show(1)
+    local warned
+    vim.notify = function(msg)
+      warned = msg
+    end ---@diagnostic disable-line: duplicate-set-field
+
+    assert.is_false(terms.transfer(dest))
+
+    assert.matches("in use", warned)
+    assert.equals(source, vim.api.nvim_get_current_tabpage())
+    assert.same({ 1 }, slots_of(terms))
+  end)
+end)
+
 describe("terms.title_icon", function()
   local terms
 
