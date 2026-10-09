@@ -59,7 +59,7 @@ agent that writes the same shape works.
 
 | Function                       | Description                                         |
 | ------------------------------ | --------------------------------------------------- |
-| `setup(opts?)`                 | Initialise slot state and the side window. `opts.shell` overrides the shell command spawned in each terminal (default: `vim.o.shell`); `opts.agent` configures agent-status tracking (`{ dir, enabled }`); `opts.project_name(tab)` names a tabpage in the agent view. |
+| `setup(opts?)`                 | Initialise slot state and the side window. `opts.shell` overrides the shell command spawned in each terminal (default: `vim.o.shell`); `opts.agent` configures agent-status tracking (`{ dir, enabled }`); `opts.project_name(tab)` names a tabpage in the agent view; `opts.workspace(n)` resolves `<C-b>mN`'s workspace number to a tabpage. |
 | `setup_keymaps()`              | Register the `<C-b>` prefix tab keymaps.            |
 | `setup_exit()`                 | Wire terminal-exit cleanup.                          |
 | `show(slot, opts?)`            | Reveal/create the terminal in `slot`. `opts.insert` controls whether focus enters insert mode. |
@@ -67,7 +67,8 @@ agent that writes the same shape works.
 | `agents()`                     | Every reporting agent across every tabpage, blocked ones first. |
 | `focus(entry)`                 | Switch to an `agents()` entry's tabpage and surface its terminal. |
 | `transfer(tab)`                | Carry the current terminal (live process, scrollback and all) into tabpage `tab`'s lowest free slot and follow it. The process's cwd does not change. |
-| `transfer_pick()`              | `<C-b>m`: `vim.ui.select` over the other tabpages by project name, then `transfer`. |
+| `transfer_to(n)`               | `<C-b>mN`: `transfer` to workspace N — `setup({ workspace = fn(n) -> tab })`'s numbering, else the Nth tabpage. |
+| `transfer_pick()`              | `vim.ui.select` over the other tabpages by project name, then `transfer`. |
 | `view.items()` / `view.popup()`| The agent view as data / as a floating chooser. |
 
 See the source for the full slot API (new / move / transfer / toggle / kill).

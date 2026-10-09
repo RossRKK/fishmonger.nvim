@@ -6,8 +6,8 @@
 -- <C-b>c opens the next free slot, <C-b>& kills the current terminal (tmux
 -- kill-window), and <C-b>.{1-9} renumbers the current terminal to another slot
 -- (tmux move-window), and <C-b>m{1-9} carries the current terminal over to
--- another workspace tabpage, picked by project name (tmux move-window -t
--- other-session). <C-t> toggles
+-- workspace N (tmux move-window -t other-session; a config numbers its
+-- workspaces via setup({ workspace }), else N is the tabpage number). <C-t> toggles
 -- the side slot from anywhere.
 --
 -- Model (the tmux-pane model): a SINGLE side window (M.win) lives in the right
@@ -56,6 +56,11 @@ local config = {
   -- of its cwd; a config that names workspaces itself passes its own.
   ---@type nil|fun(tab: integer): string
   project_name = nil,
+  -- Which tabpage is workspace N, for <C-b>mN. Nil means the Nth tabpage; a
+  -- config that gives its workspaces stable numbers (surviving a close to
+  -- their left) passes its own lookup, returning nil for a number not in use.
+  ---@type nil|fun(n: integer): integer?
+  workspace = nil,
 }
 
 -- Resolve the configured width to a column count.
@@ -726,7 +731,24 @@ function M.transfer(dest)
   return true
 end
 
--- <C-b>m: choose the destination tabpage for M.transfer by project name
+-- <C-b>mN: M.transfer to workspace N -- config.workspace's numbering, else the
+-- Nth tabpage. Says so rather than doing nothing when there is no workspace N,
+-- and is a quiet no-op for the workspace you are already in.
+function M.transfer_to(n)
+  local dest
+  if config.workspace then
+    dest = config.workspace(n)
+  else
+    dest = vim.api.nvim_list_tabpages()[n]
+  end
+  if not (dest and vim.api.nvim_tabpage_is_valid(dest)) then
+    vim.notify("no workspace " .. n, vim.log.levels.WARN)
+    return false
+  end
+  return M.transfer(dest)
+end
+
+-- Choose the destination tabpage for M.transfer by project name
 -- (M.project_name, so a config that names workspaces by repo + worktree gets
 -- those names). The current tabpage is left out -- there is nowhere to move
 -- within it -- and with no other tabpage at all we say so instead of opening
@@ -963,9 +985,12 @@ function M.setup_keymaps()
         M.move(tonumber(dest))
       end
     elseif key == "m" then
-      -- Carry the terminal to another workspace, chosen by project name: you
-      -- think of tabpages as "which repo / worktree", not by their number.
-      M.transfer_pick()
+      -- Carry the terminal to workspace N, like "." takes a slot: the next
+      -- keystroke is the destination's number, as its label shows it.
+      local ok2, dest = pcall(vim.fn.getcharstr)
+      if ok2 and dest:match("^[1-9]$") then
+        M.transfer_to(tonumber(dest))
+      end
     elseif vim.api.nvim_get_mode().mode:sub(1, 1) == "n" then
       -- Not one of ours: replay the raw <C-b> + key unmapped ("n") so the
       -- builtin scroll-back (and whatever the key does) still happens.
@@ -977,7 +1002,7 @@ function M.setup_keymaps()
     { "n", "t" },
     "<C-b>",
     tab_prefix,
-    { desc = "Terminal prefix (<C-b>N tab / c new / & kill / . move / m to workspace / a agents)" }
+    { desc = "Terminal prefix (<C-b>N tab / c new / & kill / . move / mN to workspace / a agents)" }
   )
 end
 
