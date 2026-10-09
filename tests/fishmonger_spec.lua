@@ -506,6 +506,64 @@ describe("terms.transfer", function()
     assert.is_false(opened)
   end)
 
+  it("sends to workspace N through the configured numbering", function()
+    local source, dest = two_tabs()
+    terms.setup({
+      workspace = function(n)
+        return n == 7 and dest or nil
+      end,
+    })
+    terms.show(1)
+    local buf = terms.slots[1].buf
+
+    assert.is_true(terms.transfer_to(7))
+
+    assert.equals(dest, vim.api.nvim_get_current_tabpage())
+    assert.equals(buf, terms.slots[1].buf)
+    vim.api.nvim_set_current_tabpage(source)
+    assert.same({}, slots_of(terms))
+  end)
+
+  it("takes N as the tabpage number without a configured numbering", function()
+    local _, dest = two_tabs()
+    terms.show(1)
+    assert.is_true(terms.transfer_to(2))
+    assert.equals(dest, vim.api.nvim_get_current_tabpage())
+  end)
+
+  it("warns and moves nothing when there is no workspace N", function()
+    local source = two_tabs()
+    terms.setup({
+      workspace = function()
+        return nil
+      end,
+    })
+    terms.show(1)
+    local warned
+    vim.notify = function(msg)
+      warned = msg
+    end ---@diagnostic disable-line: duplicate-set-field
+
+    assert.is_false(terms.transfer_to(2))
+
+    assert.matches("no workspace 2", warned)
+    assert.equals(source, vim.api.nvim_get_current_tabpage())
+    assert.same({ 1 }, slots_of(terms))
+  end)
+
+  it("reads the workspace number after <C-b>m", function()
+    local _, dest = two_tabs()
+    terms.setup_keymaps()
+    terms.show(1)
+    local buf = terms.slots[1].buf
+    vim.cmd("stopinsert")
+
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-b>m2", true, false, true), "x", false)
+
+    assert.equals(dest, vim.api.nvim_get_current_tabpage())
+    assert.equals(buf, terms.slots[1].buf)
+  end)
+
   it("warns and leaves both tabpages alone when the destination is full", function()
     local source, dest = two_tabs()
     vim.api.nvim_set_current_tabpage(dest)
