@@ -146,6 +146,9 @@ function M.popup()
   end
 
   local buf = vim.api.nvim_create_buf(false, true)
+  -- A scratch buffer defaults to bufhidden=hide: without this every popup
+  -- left a buffer (and its keymaps) behind.
+  vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].filetype = "fishmonger_agents"
   local ns = vim.api.nvim_create_namespace("fishmonger_agents")
   local win
