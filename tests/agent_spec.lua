@@ -68,6 +68,23 @@ describe("agent status", function()
     assert.equals(0, vim.fn.filereadable(dir .. "/dead.json"))
   end)
 
+  it("stops spinning for a busy agent that dies without writing again", function()
+    local agent = fresh_agent()
+    local proc = vim.system({ "sleep", "60" })
+    write_session("killed", { state = "busy", agent_pid = proc.pid })
+    reload(agent)
+    assert.equals(1, #agent.all())
+    assert.is_not_nil(agent._spin.timer)
+
+    proc:kill(9)
+    proc:wait()
+    agent._tick()
+
+    assert.equals(0, #agent.all())
+    assert.is_nil(agent._spin.timer)
+    assert.equals(0, vim.fn.filereadable(dir .. "/killed.json"))
+  end)
+
   it("matches a session to the terminal whose shell pid is in its chain", function()
     local agent = fresh_agent()
     write_session("mine", { pids = { 4242, 99, 1 } })

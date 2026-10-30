@@ -180,20 +180,27 @@ local function spinning_somewhere()
   return false
 end
 
+--- Advance the spinner a frame. An agent killed mid-turn never writes another
+--- file, so without the liveness check its "busy" would spin forever.
+local function tick()
+  for _, record in pairs(sessions) do
+    if not alive(record) then
+      M.refresh()
+      return
+    end
+  end
+  spin.frame = spin.frame % #M.states.busy.frames + 1
+  spin.on_tick()
+end
+M._tick, M._spin = tick, spin -- exposed for tests only
+
 --- Start or stop the spinner to match the sessions. Called after every reload:
 --- the set of busy agents only changes when the session files do.
 local function sync_spinner()
   local want = spinning_somewhere()
   if want and not spin.timer then
     spin.timer = vim.uv.new_timer()
-    spin.timer:start(
-      0,
-      150,
-      vim.schedule_wrap(function()
-        spin.frame = spin.frame % #M.states.busy.frames + 1
-        spin.on_tick()
-      end)
-    )
+    spin.timer:start(0, 150, vim.schedule_wrap(tick))
   elseif not want and spin.timer then
     spin.timer:stop()
     spin.timer:close()
