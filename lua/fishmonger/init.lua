@@ -622,6 +622,54 @@ function M.new()
   vim.notify("all " .. MAX .. " terminal slots in use", vim.log.levels.WARN)
 end
 
+-- Zoom floats the side window instead of closing the others, so it keeps its
+-- handle, buffer swaps and winbar, and a split-only layout manager (edgy) lets go.
+local function is_zoomed(win)
+  return vim.api.nvim_win_get_config(win).relative ~= ""
+end
+
+-- The editor minus the tabline and statusline/cmdline; zindex under the default
+-- 50 so popups (lazygit, the agent view) still land on top.
+local function zoom_config()
+  local tabline = vim.o.showtabline == 2 or (vim.o.showtabline == 1 and #vim.api.nvim_list_tabpages() > 1)
+  local top = tabline and 1 or 0
+  local bottom = vim.o.cmdheight + (vim.o.laststatus > 0 and 1 or 0)
+  return {
+    relative = "editor",
+    row = top,
+    col = 0,
+    width = vim.o.columns,
+    height = vim.o.lines - top - bottom,
+    zindex = 10,
+  }
+end
+
+local function zoom(win)
+  vim.api.nvim_win_set_config(win, zoom_config())
+  vim.wo[win].winhighlight = "NormalFloat:Normal"
+end
+
+local function unzoom(win)
+  vim.api.nvim_win_set_config(win, { split = "right", win = -1 })
+  pcall(vim.api.nvim_win_set_width, win, want_width())
+end
+
+-- <C-b>z: tmux zoom -- the side terminal fills the tabpage, tab strip and all;
+-- again docks it back. Opens the panel first if it's hidden.
+function M.zoom()
+  local win = viewport()
+  if not win then
+    M.show(st().current or BASE)
+    win = viewport()
+  end
+  if is_zoomed(win) then
+    unzoom(win)
+  else
+    zoom(win)
+  end
+  vim.api.nvim_set_current_win(win)
+end
+
 -- <C-b>&: kill the current side terminal (tmux kill-window). Unlike <C-t>, which
 -- only hides the window, this shuts the shell down. If the killed terminal is the
 -- one on screen we bring another tab into the viewport BEFORE deleting its buffer
@@ -923,8 +971,24 @@ function M.setup(opts)
       local width = want_width()
       for _, state in pairs(states) do
         if state.win and vim.api.nvim_win_is_valid(state.win) then
-          pcall(vim.api.nvim_win_set_width, state.win, width)
+          if is_zoomed(state.win) then
+            zoom(state.win)
+          else
+            pcall(vim.api.nvim_win_set_width, state.win, width)
+          end
         end
+      end
+    end,
+  })
+  -- tmux unzooms on selecting another pane; here that's entering another split
+  -- (gf, <C-h>), which would otherwise land in a window hidden under the zoom.
+  vim.api.nvim_create_autocmd("WinEnter", {
+    group = grp,
+    callback = function()
+      local win = viewport()
+      local entered = vim.api.nvim_get_current_win()
+      if win and win ~= entered and is_zoomed(win) and not is_zoomed(entered) then
+        unzoom(win)
       end
     end,
   })
@@ -976,6 +1040,8 @@ function M.setup_keymaps()
       -- waiting on an agent, where the free keys are the ones already routed
       -- through here.
       require("fishmonger.view").popup()
+    elseif key == "z" then
+      M.zoom()
     elseif key == "&" then
       M.kill()
     elseif key == "." then
@@ -1002,7 +1068,7 @@ function M.setup_keymaps()
     { "n", "t" },
     "<C-b>",
     tab_prefix,
-    { desc = "Terminal prefix (<C-b>N tab / c new / & kill / . move / mN to workspace / a agents)" }
+    { desc = "Terminal prefix (<C-b>N tab / c new / z zoom / & kill / . move / mN to workspace / a agents)" }
   )
 end
 

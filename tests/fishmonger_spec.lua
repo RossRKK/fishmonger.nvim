@@ -286,6 +286,104 @@ describe("terms.toggle", function()
   end)
 end)
 
+-- Zoom (tmux resize-pane -Z): the side window floats over the whole tabpage.
+describe("terms.zoom", function()
+  local terms
+
+  --- Whether the side window is currently floated over the tabpage.
+  local function zoomed()
+    return vim.api.nvim_win_get_config(terms.win).relative ~= ""
+  end
+
+  before_each(function()
+    terms = fresh_terms()
+    terms.setup({})
+    vim.o.showtabline = 2
+    vim.o.laststatus = 3
+    vim.o.cmdheight = 1
+  end)
+
+  after_each(function()
+    -- :only can't run from a float, which every zoomed test leaves us in.
+    if terms.win and vim.api.nvim_win_is_valid(terms.win) then
+      vim.api.nvim_win_close(terms.win, true)
+    end
+  end)
+
+  it("fills the editor below the tabline and above the statusline", function()
+    terms.show(1)
+    terms.zoom()
+
+    local cfg = vim.api.nvim_win_get_config(terms.win)
+    assert.same({ "editor", 1, 0 }, { cfg.relative, cfg.row, cfg.col })
+    assert.equals(vim.o.columns, vim.api.nvim_win_get_width(terms.win))
+    assert.equals(vim.o.lines - 3, vim.api.nvim_win_get_height(terms.win))
+  end)
+
+  it("keeps the same window, so tabs switch inside the zoom", function()
+    terms.show(1)
+    local win = terms.win
+    terms.zoom()
+    terms.show(2)
+
+    assert.equals(win, terms.win)
+    assert.equals(2, open_slot(terms))
+    assert.is_true(zoomed())
+  end)
+
+  it("docks the window back on a second zoom", function()
+    terms.show(1)
+    local win = terms.win
+    terms.zoom()
+    terms.zoom()
+
+    assert.equals(win, terms.win)
+    assert.is_false(zoomed())
+    assert.same("row", vim.fn.winlayout()[1]) -- back beside the editor
+  end)
+
+  it("opens the hidden panel zoomed", function()
+    terms.zoom()
+
+    assert.equals(1, open_slot(terms))
+    assert.is_true(zoomed())
+  end)
+
+  it("docks when another split is entered", function()
+    local editor = vim.api.nvim_get_current_win()
+    terms.show(1)
+    terms.zoom()
+    vim.api.nvim_set_current_win(editor)
+
+    assert.is_false(zoomed())
+  end)
+
+  it("stays zoomed when a popup float is entered", function()
+    terms.show(1)
+    terms.zoom()
+    local popup = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), true, {
+      relative = "editor",
+      row = 5,
+      col = 5,
+      width = 10,
+      height = 5,
+    })
+
+    assert.is_true(zoomed())
+    vim.api.nvim_win_close(popup, true)
+  end)
+
+  it("refits the screen on VimResized", function()
+    terms.show(1)
+    terms.zoom()
+    vim.o.columns = vim.o.columns + 10
+    vim.api.nvim_exec_autocmds("VimResized", {})
+
+    assert.equals(vim.o.columns, vim.api.nvim_win_get_width(terms.win))
+    assert.is_true(zoomed())
+  end)
+end)
+
 -- A tabpage is a workspace: slots, the shown tab and the side window are all
 -- per-tabpage, and terms.slots/current/win report the CURRENT tabpage's.
 describe("per-tabpage state", function()
