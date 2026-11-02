@@ -166,10 +166,12 @@ end
 -- current window. Re-assert the filetype (jobstart can reset it) and pass <C-k>
 -- through -- the side terminal is full-height, so <C-k> window-nav is useless
 -- here and the running app (e.g. Claude Code) should get the key instead.
+-- Returns the job's channel, which M.send writes to.
 local function start_job(buf)
-  vim.fn.jobstart(config.shell, { term = true })
+  local chan = vim.fn.jobstart(config.shell, { term = true })
   vim.bo[buf].filetype = config.filetype
   vim.keymap.set("t", "<C-k>", "<C-k>", { buffer = buf })
+  return chan
 end
 
 -- Kill a terminal's shell by deleting its buffer: that stops the job and fires
@@ -574,8 +576,8 @@ function M.show(slot, opts)
     -- TUI's first render -- an off-by-one repaint. The scheduled reassertion
     -- further down stays as a backstop for any later async re-blanking.
     apply_winbar(win)
-    start_job(buf) -- buf is on screen now, so the pty sizes to the side window
-    state.slots[slot] = { buf = buf }
+    -- buf is on screen now, so the pty sizes to the side window
+    state.slots[slot] = { buf = buf, chan = start_job(buf) }
   end
 
   state.current = slot
@@ -595,6 +597,25 @@ function M.show(slot, opts)
       vim.cmd("startinsert")
     end
   end)
+end
+
+-- Type `text` into the current side terminal (the one <C-t> would show) and
+-- land there in terminal mode, WITHOUT a trailing newline: the text is a start
+-- on the prompt, not a submitted command, so you finish the line yourself -- a
+-- `path:line` reference followed by your comment to the agent, say. Refuses
+-- rather than spawning a shell to receive it, since text typed into a terminal
+-- that has only just started races the shell's own startup.
+function M.send(text)
+  local state = st()
+  local slot = state.current
+  local term = slot and state.slots[slot]
+  if not (term and term.chan and vim.api.nvim_buf_is_valid(term.buf)) then
+    vim.notify("no side terminal to send to", vim.log.levels.WARN)
+    return false
+  end
+  M.show(slot)
+  vim.api.nvim_chan_send(term.chan, text)
+  return true
 end
 
 -- <C-t>: toggle the side slot — close the window if open (buffers stay alive),
