@@ -62,7 +62,9 @@ agent that writes the same shape works.
 | `setup(opts?)`                 | Initialise slot state and the side window. `opts.shell` overrides the shell command spawned in each terminal (default: `vim.o.shell`); `opts.agent` configures agent-status tracking (`{ dir, enabled }`); `opts.project_name(tab)` names a tabpage in the agent view; `opts.workspace(n)` resolves `<C-b>mN`'s workspace number to a tabpage. |
 | `setup_keymaps()`              | Register the `<C-b>` prefix tab keymaps.            |
 | `setup_exit()`                 | Wire terminal-exit cleanup.                          |
-| `show(slot, opts?)`            | Reveal/create the terminal in `slot`. `opts.insert` controls whether focus enters insert mode. |
+| `show(slot, opts?)`            | Reveal/create the terminal in `slot` in the target window: the current terminal window, else the one used last, else the side panel. A tab already showing in another window swaps places with it. `opts.insert` controls whether focus enters insert mode. |
+| `here()`                       | `<C-b>t`: a terminal in the current window, like `:edit` (`<C-o>` goes back), showing the most recent tab not on screen. |
+| `cycle()`                      | `<C-b>o`: focus the next terminal window. |
 | `zoom()`                       | `<C-b>z`: tmux zoom. The side terminal fills the screen and keeps its tab strip, and tab keys still switch inside it. Press again, or enter another split, to dock it. |
 | `tabs(tab?)`                   | A tabpage's terminals as `{ slot, title, icon, hl, agent }`. `icon` is the status glyph: the agent's reported state, else the OSC title's leading glyph. |
 | `agents()`                     | Every reporting agent across every tabpage, blocked ones first. |
@@ -73,6 +75,10 @@ agent that writes the same shape works.
 | `view.items()` / `view.popup()`| The agent view as data / as a floating chooser. |
 
 See the source for the full slot API (new / move / transfer / toggle / kill).
+
+The side panel carries `w:fishmonger_side`. A layout manager that docks it
+(edgy, say) should filter on that rather than the `fishmonger` filetype, so a
+terminal opened in the editor area with `<C-b>t` stays where it is.
 
 ## Tests
 
