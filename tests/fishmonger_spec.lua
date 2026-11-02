@@ -19,6 +19,7 @@ local function fresh_terms()
   end
   pcall(vim.cmd, "tabonly") -- drop leftover tabpages (state is per-tabpage)
   pcall(vim.cmd, "only") -- collapse leftover split windows from a prior test
+  vim.w.fishmonger_side = nil -- the survivor may have been the side panel
   package.loaded["fishmonger"] = nil
   return require("fishmonger")
 end
@@ -94,6 +95,14 @@ describe("terms.show", function()
     terms.show(2)
     assert.equals(win, terms.win)
     assert.equals(terms.slots[2].buf, vim.api.nvim_win_get_buf(terms.win))
+  end)
+
+  -- The marker is the contract a layout manager (edgy) docks the panel by.
+  it("marks the side panel with w:fishmonger_side", function()
+    local editor = vim.api.nvim_get_current_win()
+    terms.show(1)
+    assert.is_true(vim.w[terms.win].fishmonger_side)
+    assert.is_nil(vim.w[editor].fishmonger_side)
   end)
 
   it("clamps a slot below the first one", function()
