@@ -70,10 +70,14 @@ local function want_width()
 end
 
 -- Per-tabpage state, keyed by tabpage handle:
---   current = slot currently shown
---   slots   = slot (1..9) -> { buf = <bufnr> }
---   win     = the tabpage's single side window (shared viewport), or nil when closed
+--   slots  = slot (1..9) -> { buf = <bufnr>, chan = <job channel> }
+--   recent = terms, most recently shown first; the current slot is the first
+--            one still in `slots`, so a renumber or a kill needs no bookkeeping
 local states = {}
+
+-- Window variable marking the side panel. A layout manager (edgy) filters on it
+-- to dock that one window, leaving terminal windows elsewhere alone.
+local SIDE = "fishmonger_side"
 
 -- This tabpage's state, created on first use. Entries for tabpages that have
 -- since closed are dropped here as well as in the TabClosed handler, which only
@@ -85,32 +89,65 @@ local function st(tab)
     end
   end
   tab = tab or vim.api.nvim_get_current_tabpage()
-  states[tab] = states[tab] or { current = BASE, slots = {}, win = nil }
+  states[tab] = states[tab] or { slots = {}, recent = {} }
   return states[tab]
 end
 
--- `current`, `slots` and `win` read through to the CURRENT tabpage's state, so
--- the module's public surface is unchanged from when there was only one. Reads
--- only: internals assign through st(), and nothing outside writes these.
+local function slot_of_term(state, term)
+  for slot, t in pairs(state.slots) do
+    if t == term then
+      return slot
+    end
+  end
+end
+
+-- Record `term` as the most recently shown, dropping terms that have left.
+local function touch(state, term)
+  local recent = { term }
+  for _, t in ipairs(state.recent) do
+    if t ~= term and slot_of_term(state, t) then
+      recent[#recent + 1] = t
+    end
+  end
+  state.recent = recent
+end
+
+-- The slot of the most recently shown terminal still in this tabpage.
+local function current_slot(state)
+  for _, term in ipairs(state.recent) do
+    local slot = slot_of_term(state, term)
+    if slot then
+      return slot
+    end
+  end
+end
+
+-- A tabpage's side panel, or nil when it is closed.
+local function side_of(tab)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if vim.w[win][SIDE] then
+      return win
+    end
+  end
+end
+
+local function viewport()
+  return side_of(vim.api.nvim_get_current_tabpage())
+end
+
+-- `current`, `slots` and `win` read through to the CURRENT tabpage, so the
+-- module's public surface is unchanged from when there was only one. Reads only.
 setmetatable(M, {
   __index = function(_, key)
-    if key == "current" or key == "slots" or key == "win" then
-      return st()[key]
+    if key == "current" then
+      return current_slot(st())
+    elseif key == "slots" then
+      return st().slots
+    elseif key == "win" then
+      return viewport()
     end
   end,
 })
-
--- The current tabpage's side window if it still exists, else nil (and forget the
--- stale handle). Windows never move between tabpages, so a handle stored here is
--- either this tabpage's or dead.
-local function viewport()
-  local state = st()
-  if state.win and vim.api.nvim_win_is_valid(state.win) then
-    return state.win
-  end
-  state.win = nil
-  return nil
-end
 
 -- The tab strip is a window-local winbar (see M.winbar). It's set on the side
 -- window and must stay set: a full-screen TUI never repaints into a changed
@@ -142,11 +179,11 @@ end
 local function open_viewport(buf)
   vim.cmd("botright vsplit")
   local win = vim.api.nvim_get_current_win()
+  vim.w[win][SIDE] = true -- before the buffer, which is what edgy reacts to
   vim.api.nvim_win_set_buf(win, buf)
   style_window(win)
   pcall(vim.api.nvim_win_set_width, win, want_width())
   vim.wo[win].winfixwidth = true
-  st().win = win
   return win
 end
 
@@ -448,7 +485,7 @@ function M.agents()
           detail = status.detail,
           cwd = status.cwd,
           session = status.session,
-          current = tab == vim.api.nvim_get_current_tabpage() and e.slot == state.current,
+          current = tab == vim.api.nvim_get_current_tabpage() and e.slot == current_slot(state),
         }
       end
     end
@@ -536,7 +573,7 @@ local function emit_tabs_changed(tab)
   end
   vim.api.nvim_exec_autocmds("User", {
     pattern = "FishmongerTabsChanged",
-    data = { tab = tab, tabs = M.tabs(tab), current = states[tab].current },
+    data = { tab = tab, tabs = M.tabs(tab), current = current_slot(states[tab]) },
   })
 end
 
@@ -580,7 +617,7 @@ function M.show(slot, opts)
     state.slots[slot] = { buf = buf, chan = start_job(buf) }
   end
 
-  state.current = slot
+  touch(state, state.slots[slot])
   vim.schedule(function()
     -- Re-assert the winbar: an adopting layout manager (edgy) blanks it
     -- synchronously on the buffer swap above, so restore it after that settles.
@@ -607,7 +644,7 @@ end
 -- that has only just started races the shell's own startup.
 function M.send(text)
   local state = st()
-  local slot = state.current
+  local slot = current_slot(state)
   local term = slot and state.slots[slot]
   if not (term and term.chan and vim.api.nvim_buf_is_valid(term.buf)) then
     vim.notify("no side terminal to send to", vim.log.levels.WARN)
@@ -625,9 +662,8 @@ function M.toggle()
   local win = viewport()
   if win then
     pcall(vim.api.nvim_win_close, win, false)
-    state.win = nil
   else
-    M.show(state.current or BASE)
+    M.show(current_slot(state) or BASE)
   end
 end
 
@@ -680,7 +716,7 @@ end
 function M.zoom()
   local win = viewport()
   if not win then
-    M.show(st().current or BASE)
+    M.show(current_slot(st()) or BASE)
     win = viewport()
   end
   if is_zoomed(win) then
@@ -711,7 +747,6 @@ function M.kill()
       M.show(nxt)
     else
       pcall(vim.api.nvim_win_close, win, true)
-      state.win = nil
     end
   end
   shutdown(term)
@@ -730,7 +765,6 @@ function M.move(dest)
   end
   local state = st()
   state.slots[source], state.slots[dest] = state.slots[dest], term
-  state.current = dest
   vim.schedule(function()
     pcall(vim.cmd, "redrawtabline")
   end)
@@ -788,13 +822,11 @@ function M.transfer(dest)
       M.show(nxt, { insert = false })
     else
       pcall(vim.api.nvim_win_close, win, true)
-      source.win = nil
     end
   end
   emit_tabs_changed(source_tab)
 
   target.slots[free] = term
-  target.current = free
   vim.api.nvim_set_current_tabpage(dest)
   M.show(free) -- opens dest's panel if it was closed; else swaps the buffer in
   return true
@@ -901,7 +933,7 @@ end
 function M.winbar()
   local tabs = {}
   for _, e in ipairs(managed()) do
-    local base = (e.slot == st().current) and "TabLineSel" or "TabLine"
+    local base = (e.slot == current_slot(st())) and "TabLineSel" or "TabLine"
     local icon, hl = status_icon(e.term, term_title(e.term))
     local status = ""
     if icon and hl then
@@ -990,12 +1022,13 @@ function M.setup(opts)
     group = grp,
     callback = function()
       local width = want_width()
-      for _, state in pairs(states) do
-        if state.win and vim.api.nvim_win_is_valid(state.win) then
-          if is_zoomed(state.win) then
-            zoom(state.win)
+      for tab in pairs(states) do
+        local win = vim.api.nvim_tabpage_is_valid(tab) and side_of(tab)
+        if win then
+          if is_zoomed(win) then
+            zoom(win)
           else
-            pcall(vim.api.nvim_win_set_width, state.win, width)
+            pcall(vim.api.nvim_win_set_width, win, width)
           end
         end
       end
@@ -1108,12 +1141,11 @@ function M.setup_exit()
       state.slots[slot] = nil
       agent.forget(args.buf) -- its cached shell pid is about to be reused by someone else
       vim.schedule(function()
-        local win = state.win
-        if win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == args.buf then
+        local win = vim.api.nvim_tabpage_is_valid(tab) and side_of(tab)
+        if win and vim.api.nvim_win_get_buf(win) == args.buf then
           local nxt, term = first_alive(state)
           if not nxt then
             pcall(vim.api.nvim_win_close, win, true)
-            state.win = nil
           elseif tab == vim.api.nvim_get_current_tabpage() then
             M.show(nxt)
           else
@@ -1121,7 +1153,7 @@ function M.setup_exit()
             -- exists, so swap it in without focusing -- M.show would drag us into
             -- that tabpage (it sets the current window).
             vim.api.nvim_win_set_buf(win, term.buf)
-            state.current = nxt
+            touch(state, term)
           end
         end
         -- Clean up the dead buffer ("[Process exited]").
