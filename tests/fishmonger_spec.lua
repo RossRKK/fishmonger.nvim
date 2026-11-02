@@ -384,6 +384,62 @@ describe("terms.zoom", function()
   end)
 end)
 
+describe("terms.send", function()
+  local terms, sent, real_chan_send
+
+  before_each(function()
+    terms = fresh_terms()
+    -- Distinct channel per terminal, so a test can tell which one was written.
+    local next_chan = 100
+    vim.fn.jobstart = function(cmd, opts) ---@diagnostic disable-line: duplicate-set-field, unused-local
+      next_chan = next_chan + 1
+      return next_chan
+    end
+    sent = {}
+    real_chan_send = vim.api.nvim_chan_send
+    vim.api.nvim_chan_send = function(chan, data) ---@diagnostic disable-line: duplicate-set-field
+      sent[#sent + 1] = { chan = chan, data = data }
+    end
+  end)
+
+  after_each(function()
+    vim.api.nvim_chan_send = real_chan_send
+  end)
+
+  it("types into the current terminal without submitting, and shows it", function()
+    terms.show(1)
+    terms.show(2)
+    terms.toggle() -- hidden: send still targets the current tab and re-shows it
+
+    assert.is_true(terms.send("lua/a.lua:12 "))
+    assert.same({ { chan = 102, data = "lua/a.lua:12 " } }, sent)
+    assert.equals(2, open_slot(terms))
+  end)
+
+  it("follows the terminal through a renumber", function()
+    terms.show(1)
+    terms.move(4)
+
+    terms.send("x")
+    assert.same({ { chan = 101, data = "x" } }, sent)
+  end)
+
+  it("refuses rather than spawning a terminal when none exists", function()
+    local warned
+    local real_notify = vim.notify
+    vim.notify = function(msg, level) ---@diagnostic disable-line: duplicate-set-field
+      warned = level == vim.log.levels.WARN and msg
+    end
+    local ok = terms.send("x")
+    vim.notify = real_notify
+
+    assert.is_false(ok)
+    assert.same({}, sent)
+    assert.same({}, slots_of(terms))
+    assert.truthy(warned)
+  end)
+end)
+
 -- A tabpage is a workspace: slots, the shown tab and the side window are all
 -- per-tabpage, and terms.slots/current/win report the CURRENT tabpage's.
 describe("per-tabpage state", function()
