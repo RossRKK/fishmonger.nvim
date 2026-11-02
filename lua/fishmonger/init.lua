@@ -806,11 +806,9 @@ function M.new()
   vim.notify("all " .. MAX .. " terminal slots in use", vim.log.levels.WARN)
 end
 
--- Zoom floats the side window instead of closing the others, so it keeps its
--- handle, buffer swaps and winbar, and a split-only layout manager (edgy) lets go.
-local function is_zoomed(win)
-  return vim.api.nvim_win_get_config(win).relative ~= ""
-end
+-- Zoomed windows, keyed by handle: the placeholder holding the window's place
+-- in the layout while it floats, the sizes to put back, and its own winhighlight.
+local zooms = {}
 
 -- The editor minus the tabline and statusline/cmdline; zindex under the default
 -- 50 so popups (lazygit, the agent view) still land on top.
@@ -828,27 +826,41 @@ local function zoom_config()
   }
 end
 
+-- Float the window itself rather than open a second one on its buffer: it keeps
+-- its handle, buffer swaps and winbar, and a terminal keeps a single pty size.
 local function zoom(win)
+  local sizes = vim.fn.winrestcmd()
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
+  zooms[win] = {
+    placeholder = vim.api.nvim_open_win(buf, false, { split = "right", win = win }),
+    sizes = sizes,
+    winhighlight = vim.wo[win].winhighlight,
+  }
   vim.api.nvim_win_set_config(win, zoom_config())
   vim.wo[win].winhighlight = "NormalFloat:Normal"
 end
 
 local function unzoom(win)
-  vim.api.nvim_win_set_config(win, { split = "right", win = -1 })
-  pcall(vim.api.nvim_win_set_width, win, want_width())
+  local z = zooms[win]
+  zooms[win] = nil
+  if vim.api.nvim_win_is_valid(z.placeholder) then
+    vim.api.nvim_win_set_config(win, { split = "left", win = z.placeholder })
+    vim.api.nvim_win_close(z.placeholder, true)
+  else
+    vim.api.nvim_win_set_config(win, { split = "right", win = -1 }) -- someone closed it
+  end
+  vim.cmd(z.sizes)
+  vim.wo[win].winhighlight = z.winhighlight
 end
 
--- <C-b>z: tmux zoom -- the side terminal fills the tabpage, tab strip and all;
--- again docks it back. Opens the panel first if it's hidden.
+-- <C-b>z: tmux zoom -- the current window fills the screen; again puts it back.
+-- Entering another window also puts it back (see setup).
 function M.zoom()
-  local win = viewport()
-  if not win then
-    M.show(current_slot(st()) or BASE)
-    win = viewport()
-  end
-  if is_zoomed(win) then
+  local win = vim.api.nvim_get_current_win()
+  if zooms[win] then
     unzoom(win)
-  else
+  elseif vim.api.nvim_win_get_config(win).relative == "" then
     zoom(win)
   end
   vim.api.nvim_set_current_win(win)
@@ -1159,18 +1171,17 @@ function M.setup(opts)
       local width = want_width()
       for tab in pairs(states) do
         local win = vim.api.nvim_tabpage_is_valid(tab) and side_of(tab)
-        if win then
-          if is_zoomed(win) then
-            zoom(win)
-          else
-            pcall(vim.api.nvim_win_set_width, win, width)
-          end
+        if win and not zooms[win] then
+          pcall(vim.api.nvim_win_set_width, win, width)
+        end
+      end
+      for win in pairs(zooms) do
+        if vim.api.nvim_win_is_valid(win) then
+          vim.api.nvim_win_set_config(win, zoom_config())
         end
       end
     end,
   })
-  -- tmux unzooms on selecting another pane; here that's entering another split
-  -- (gf, <C-h>), which would otherwise land in a window hidden under the zoom.
   -- Entering a terminal window makes its tab the current one, which is what
   -- sends <C-b> from the editor back to the window you were last in.
   vim.api.nvim_create_autocmd("WinEnter", {
@@ -1184,13 +1195,35 @@ function M.setup(opts)
       pcall(vim.cmd, "redrawstatus!")
     end,
   })
+  -- tmux unzooms on selecting another pane; here that's entering another split
+  -- (gf, <C-h>), which would otherwise land in a window hidden under the zoom.
+  -- Popups are floats too, and leave it be.
   vim.api.nvim_create_autocmd("WinEnter", {
     group = grp,
     callback = function()
-      local win = viewport()
       local entered = vim.api.nvim_get_current_win()
-      if win and win ~= entered and is_zoomed(win) and not is_zoomed(entered) then
-        unzoom(win)
+      if vim.api.nvim_win_get_config(entered).relative ~= "" then
+        return
+      end
+      local tab = vim.api.nvim_get_current_tabpage()
+      for win in pairs(zooms) do
+        if win ~= entered and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_tabpage(win) == tab then
+          unzoom(win)
+        end
+      end
+    end,
+  })
+  -- A zoomed window closed while floating (<C-t> on the side panel, :q) takes
+  -- its placeholder with it. Deferred: windows can't close inside WinClosed.
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = grp,
+    callback = function(args)
+      local z = zooms[tonumber(args.match)]
+      zooms[tonumber(args.match)] = nil
+      if z then
+        vim.schedule(function()
+          pcall(vim.api.nvim_win_close, z.placeholder, true)
+        end)
       end
     end,
   })

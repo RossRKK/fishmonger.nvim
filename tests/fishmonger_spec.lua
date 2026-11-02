@@ -20,6 +20,7 @@ local function fresh_terms()
   pcall(vim.cmd, "tabonly") -- drop leftover tabpages (state is per-tabpage)
   pcall(vim.cmd, "only") -- collapse leftover split windows from a prior test
   vim.w.fishmonger_side = nil -- the survivor may have been the side panel
+  vim.wo.winfixwidth = false
   package.loaded["fishmonger"] = nil
   return require("fishmonger")
 end
@@ -295,7 +296,7 @@ describe("terms.toggle", function()
   end)
 end)
 
--- Zoom (tmux resize-pane -Z): the side window floats over the whole tabpage.
+-- Zoom (tmux resize-pane -Z): the current window floats over the whole tabpage.
 describe("terms.zoom", function()
   local terms
 
@@ -314,8 +315,10 @@ describe("terms.zoom", function()
 
   after_each(function()
     -- :only can't run from a float, which every zoomed test leaves us in.
-    if terms.win and vim.api.nvim_win_is_valid(terms.win) then
-      vim.api.nvim_win_close(terms.win, true)
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if vim.api.nvim_win_get_config(win).relative ~= "" then
+        vim.api.nvim_win_close(win, true)
+      end
     end
   end)
 
@@ -351,11 +354,34 @@ describe("terms.zoom", function()
     assert.same("row", vim.fn.winlayout()[1]) -- back beside the editor
   end)
 
-  it("opens the hidden panel zoomed", function()
+  it("zooms whichever window is current, editor included", function()
+    local editor = vim.api.nvim_get_current_win()
+    terms.show(1)
+    vim.api.nvim_set_current_win(editor)
     terms.zoom()
 
-    assert.equals(1, open_slot(terms))
-    assert.is_true(zoomed())
+    assert.equals("editor", vim.api.nvim_win_get_config(editor).relative)
+    assert.is_false(zoomed()) -- the side panel stays docked
+  end)
+
+  it("puts a window back where it was in the layout, at its old size", function()
+    vim.o.columns = 200 -- headless is 80 wide: the side panel alone would fill it
+    local left = vim.api.nvim_get_current_win()
+    vim.cmd("vsplit | split") -- a column of two beside `left`
+    local top = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_height(top, 5)
+    terms.show(1)
+    local layout, sizes = vim.fn.winlayout(), vim.fn.winrestcmd()
+
+    vim.api.nvim_set_current_win(top)
+    terms.zoom()
+    terms.zoom()
+
+    assert.same(layout, vim.fn.winlayout())
+    assert.equals(sizes, vim.fn.winrestcmd())
+    assert.equals(1, #vim.tbl_filter(function(w)
+      return w == left
+    end, vim.api.nvim_tabpage_list_wins(0)))
   end)
 
   it("docks when another split is entered", function()
