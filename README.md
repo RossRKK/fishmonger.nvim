@@ -63,6 +63,7 @@ agent that writes the same shape works.
 | `setup_keymaps()`              | Register the `<C-b>` prefix tab keymaps.            |
 | `setup_exit()`                 | Wire terminal-exit cleanup.                          |
 | `show(slot, opts?)`            | Reveal/create the terminal in `slot`. `opts.insert` controls whether focus enters insert mode. |
+| `zoom()`                       | `<C-b>z`: tmux zoom. The side terminal fills the screen and keeps its tab strip, and tab keys still switch inside it. Press again, or enter another split, to dock it. |
 | `tabs(tab?)`                   | A tabpage's terminals as `{ slot, title, icon, hl, agent }`. `icon` is the status glyph: the agent's reported state, else the OSC title's leading glyph. |
 | `agents()`                     | Every reporting agent across every tabpage, blocked ones first. |
 | `focus(entry)`                 | Switch to an `agents()` entry's tabpage and surface its terminal. |
