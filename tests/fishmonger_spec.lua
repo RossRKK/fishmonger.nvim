@@ -393,6 +393,120 @@ describe("terms.zoom", function()
   end)
 end)
 
+-- Terminal windows outside the side panel share the tabpage's one set of tabs.
+describe("terminal windows", function()
+  local terms, editor, file
+
+  --- The slot a window shows, or nil when it shows something else.
+  local function slot_in(win)
+    local buf = vim.api.nvim_win_get_buf(win)
+    for slot, term in pairs(terms.slots) do
+      if term.buf == buf then
+        return slot
+      end
+    end
+  end
+
+  before_each(function()
+    terms = fresh_terms()
+    editor = vim.api.nvim_get_current_win()
+    file = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(file, "fishmonger-spec-file-" .. file)
+    vim.api.nvim_win_set_buf(editor, file)
+  end)
+
+  it("opens a terminal in the current window, back to the file with <C-o>", function()
+    terms.here()
+
+    assert.equals(1, slot_in(editor))
+    assert.is_nil(terms.win) -- no side panel was opened
+    vim.cmd('execute "normal! \\<C-o>"')
+    assert.equals(file, vim.api.nvim_win_get_buf(editor))
+  end)
+
+  it("gives the editor window its own options back after the terminal", function()
+    vim.wo[editor].number = true
+    terms.here()
+    assert.is_false(vim.wo[editor].number)
+
+    vim.api.nvim_win_set_buf(editor, file)
+    assert.is_true(vim.wo[editor].number)
+  end)
+
+  it("opens the most recent tab not already on screen", function()
+    terms.show(1)
+    terms.show(2) -- side shows 2; 1 is the most recent hidden tab
+    vim.api.nvim_set_current_win(editor)
+    terms.here()
+
+    assert.equals(1, slot_in(editor))
+    assert.equals(2, slot_in(terms.win))
+  end)
+
+  it("does nothing in a window already showing a terminal", function()
+    terms.show(1)
+    terms.here()
+    assert.same({ 1 }, slots_of(terms))
+  end)
+
+  it("sends <C-b>N from the editor to the terminal window used last", function()
+    terms.show(1) -- side panel
+    vim.api.nvim_set_current_win(editor)
+    terms.here() -- editor shows 2, and was used last
+    local side = terms.win
+    vim.cmd("split") -- a plain window: not a terminal
+    vim.api.nvim_win_set_buf(0, file)
+    terms.show(3)
+
+    assert.equals(3, slot_in(editor))
+    assert.equals(1, slot_in(side))
+  end)
+
+  it("swaps two windows' tabs when picking one shown in the other", function()
+    terms.show(1)
+    vim.api.nvim_set_current_win(editor)
+    terms.here() -- editor 2, side 1
+    terms.show(1)
+
+    assert.equals(1, slot_in(editor))
+    assert.equals(2, slot_in(terms.win))
+  end)
+
+  it("moves focus to the next terminal window", function()
+    terms.show(1)
+    vim.api.nvim_set_current_win(editor)
+    terms.here()
+    terms.cycle()
+
+    assert.equals(terms.win, vim.api.nvim_get_current_win())
+    assert.equals(1, terms.current)
+  end)
+
+  it("puts the file back when the last terminal there is killed", function()
+    terms.here()
+    terms.kill()
+
+    assert.same({}, slots_of(terms))
+    assert.equals(file, vim.api.nvim_win_get_buf(editor))
+  end)
+
+  it("marks the target's tab, the other window's dimmer, and tabs shown elsewhere", function()
+    terms.setup({})
+    terms.show(1)
+    local side = terms.win
+    vim.api.nvim_set_current_win(editor)
+    terms.here() -- editor 2 (target), side 1
+
+    local function strip(win)
+      vim.g.statusline_winid = win -- as nvim sets it while drawing that winbar
+      return terms.winbar()
+    end
+    assert.truthy(strip(editor):find("%#TabLineSel# 2:", 1, true))
+    assert.truthy(strip(editor):find("%#FishmongerTabElsewhere# 1:", 1, true))
+    assert.truthy(strip(side):find("%#FishmongerTabSelNC# 1:", 1, true))
+  end)
+end)
+
 describe("terms.send", function()
   local terms, sent, real_chan_send
 

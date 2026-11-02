@@ -10,9 +10,11 @@
 -- workspaces via setup({ workspace }), else N is the tabpage number). <C-t> toggles
 -- the side slot from anywhere.
 --
--- Model (the tmux-pane model): a SINGLE side window (M.win) lives in the right
--- slot, and switching tabs swaps which terminal buffer that window shows --
--- nvim_win_set_buf, never close+reopen. The window's size therefore never
+-- Model (the tmux-pane model): the side panel (M.win) lives in the right slot,
+-- and <C-b>t opens a terminal in any other window too. Every terminal window
+-- shows one of the tabpage's shared tabs; <C-b> acts on the current one, or from
+-- the editor on the one used last. Switching tabs swaps which terminal buffer a
+-- window shows -- nvim_win_set_buf, never close+reopen. Its size therefore never
 -- changes on a switch, so the pty never gets a SIGWINCH and a full-screen TUI
 -- (Claude Code) never repaints into a stale geometry -- which is what produced
 -- the doubled/off-by-one rows the old hide/show-per-terminal approach caused
@@ -157,16 +159,16 @@ setmetatable(M, {
 -- swap; apply_winbar re-establishes it after the swap (see M.show). Re-asserting
 -- the same value is inert for the pty -- it changes no window geometry.
 local function apply_winbar(win)
-  vim.wo[win].winbar = "%!v:lua.fishmonger_winbar()"
+  vim.api.nvim_set_option_value("winbar", "%!v:lua.fishmonger_winbar()", { scope = "local", win = win })
 end
 
--- Apply the terminal look to the side window. Window-local, so it's set once on
--- the shared window and persists across every buffer swap.
+-- Apply the terminal look to a window showing a terminal. :setlocal, so it goes
+-- with the terminal: an editor window <C-o>'d back to its file gets its own
+-- options back. Re-applied on every swap, which is inert when nothing changes.
 local function style_window(win)
-  vim.wo[win].number = false
-  vim.wo[win].relativenumber = false
-  vim.wo[win].signcolumn = "no"
-  vim.wo[win].cursorline = false
+  for name, value in pairs({ number = false, relativenumber = false, signcolumn = "no", cursorline = false }) do
+    vim.api.nvim_set_option_value(name, value, { scope = "local", win = win })
+  end
   apply_winbar(win)
 end
 
@@ -257,31 +259,114 @@ local function owner_of_buf(buf)
   end
 end
 
--- The slot/terminal currently shown in the side window (nil if none).
-local function shown()
-  local win = viewport()
-  if not win then
-    return nil
+-- The windows of `tab` showing one of its terminals, in layout order.
+local function terminal_windows(state, tab)
+  local out = {}
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if slot_of_buf(vim.api.nvim_win_get_buf(win), state) then
+      out[#out + 1] = win
+    end
   end
-  return slot_of_buf(vim.api.nvim_win_get_buf(win))
+  return out
 end
 
--- The slot/terminal a command should act on: the focused terminal if there is
--- one, else whatever occupies the side slot.
+local function window_showing(tab, buf)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      return win
+    end
+  end
+end
+
+-- The terminal window <C-b> acts on: the current window if it is one, else the
+-- one showing the most recently used tab, else the side panel.
+local function target_window(state, tab)
+  local cur = vim.api.nvim_get_current_win()
+  if vim.api.nvim_win_get_tabpage(cur) == tab and slot_of_buf(vim.api.nvim_win_get_buf(cur), state) then
+    return cur
+  end
+  local slot = current_slot(state)
+  return slot and window_showing(tab, state.slots[slot].buf) or side_of(tab) or terminal_windows(state, tab)[1]
+end
+
+-- The slot/terminal a command should act on: the one in the target window.
 local function current_target()
-  local slot, term = slot_of_buf(vim.api.nvim_get_current_buf())
-  if slot then
-    return slot, term
+  local tab = vim.api.nvim_get_current_tabpage()
+  local state = st(tab)
+  local win = target_window(state, tab)
+  if win then
+    return slot_of_buf(vim.api.nvim_win_get_buf(win), state)
   end
-  return shown()
 end
 
--- The first surviving managed terminal (used to pick a replacement when the shown
--- one is killed/exits).
-local function first_alive(state)
+-- The most recently used terminal that no window of `tab` shows, falling back
+-- to slot order for any never shown.
+local function hidden_term(state, tab)
+  local on_screen = {}
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    on_screen[vim.api.nvim_win_get_buf(win)] = true
+  end
+  for _, term in ipairs(state.recent) do
+    if slot_of_term(state, term) and not on_screen[term.buf] then
+      return term
+    end
+  end
   for _, e in ipairs(managed(state)) do
-    if vim.api.nvim_buf_is_valid(e.term.buf) then
-      return e.slot, e.term
+    if not on_screen[e.term.buf] then
+      return e.term
+    end
+  end
+end
+
+-- The slot a newly opened terminal window shows: the most recent hidden tab,
+-- else the lowest free slot. Nil when all nine are on screen.
+local function hidden_slot(state, tab)
+  local term = hidden_term(state, tab)
+  if term then
+    return slot_of_term(state, term)
+  end
+  for i = BASE, MAX do
+    if not state.slots[i] then
+      return i
+    end
+  end
+end
+
+-- A terminal window with no terminal left to show goes back to the buffer it
+-- had before; the side panel never had one, so it closes.
+local function fall_back(win, state)
+  local alt = vim.api.nvim_win_call(win, function()
+    return vim.fn.bufnr("#")
+  end)
+  if not vim.w[win][SIDE] and vim.api.nvim_buf_is_valid(alt) and not slot_of_buf(alt, state) then
+    vim.api.nvim_win_set_buf(win, alt)
+  elseif not pcall(vim.api.nvim_win_close, win, true) then
+    vim.api.nvim_win_call(win, function()
+      vim.cmd("enew")
+    end)
+  end
+end
+
+-- Every window of `tab` showing `buf`, which has just left the tabpage's slots,
+-- takes another hidden terminal (tmux kill-window), or falls back without one.
+-- Only the current window's replacement becomes the current tab, so a terminal
+-- dying elsewhere doesn't move where <C-b> goes.
+local function vacate(state, tab, buf)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      local nxt = hidden_term(state, tab)
+      if not nxt then
+        fall_back(win, state)
+      else
+        vim.api.nvim_win_set_buf(win, nxt.buf)
+        style_window(win)
+        if win == vim.api.nvim_get_current_win() then
+          touch(state, nxt)
+          vim.schedule(function()
+            vim.cmd("startinsert")
+          end)
+        end
+      end
     end
   end
 end
@@ -582,58 +667,62 @@ end
 -- this, those compile as global lookups and crash on a nil value.
 local refresh_os_title
 
--- Show the terminal in `slot`, creating it if the slot is empty. Opens the shared
--- side window only if it isn't already open; otherwise just swaps its buffer.
--- `opts.insert` (default true) controls whether we land in terminal mode.
-function M.show(slot, opts)
+-- Show the terminal in `slot` in `win`, creating it if the slot is empty; nil
+-- opens the side panel for it. A tab already on screen in another window trades
+-- places with what `win` shows: a terminal in two windows would have one pty
+-- sized for both. `opts.insert` (default true) lands in terminal mode.
+local function show_in(win, slot, opts)
   opts = opts or {}
   slot = clamp(slot)
 
-  local state = st()
-  local win = viewport()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local state = st(tab)
   local term = state.slots[slot]
   local have_buf = term and vim.api.nvim_buf_is_valid(term.buf)
   local buf = have_buf and term.buf or make_term_buf()
 
   if not win then
-    -- No side window yet: open one carrying `buf` (edgy adopts it via FT).
     win = open_viewport(buf)
   else
-    -- Reuse the side window: just swap its buffer. Same window, same size, so no
-    -- resize -- which is the whole point (no SIGWINCH, no torn redraw).
+    -- Same window, same size: a plain tab switch sends the pty no SIGWINCH.
+    local elsewhere = have_buf and window_showing(tab, buf)
+    local _, mine = slot_of_buf(vim.api.nvim_win_get_buf(win), state)
     vim.api.nvim_win_set_buf(win, buf)
+    if elsewhere and elsewhere ~= win and mine then
+      vim.api.nvim_win_set_buf(elsewhere, mine.buf)
+      style_window(elsewhere)
+    end
   end
+  style_window(win)
   vim.api.nvim_set_current_win(win)
 
   if not have_buf then
-    -- Re-assert the winbar synchronously before sizing the pty: an adopting
-    -- layout manager (edgy) blanks it on the buffer swap/focus above, and if
-    -- start_job sized the pty to that transiently-taller window, the deferred
-    -- reassertion below would shrink the window by one row right after the
-    -- TUI's first render -- an off-by-one repaint. The scheduled reassertion
-    -- further down stays as a backstop for any later async re-blanking.
-    apply_winbar(win)
-    -- buf is on screen now, so the pty sizes to the side window
+    -- buf is on screen now, so the pty sizes to this window
     state.slots[slot] = { buf = buf, chan = start_job(buf) }
   end
 
   touch(state, state.slots[slot])
   vim.schedule(function()
-    -- Re-assert the winbar: an adopting layout manager (edgy) blanks it
-    -- synchronously on the buffer swap above, so restore it after that settles.
-    -- Use viewport()'s result, not the `win` captured above: if the side window
-    -- was closed and reopened within this tick, `win` is a stale (invalid)
-    -- handle while viewport() is the live one.
-    local vp = viewport()
-    if vp then
-      apply_winbar(vp)
+    -- Re-assert the winbars: an adopting layout manager (edgy) blanks them
+    -- synchronously on the buffer swap above, so restore them after that settles.
+    if vim.api.nvim_tabpage_is_valid(tab) then
+      for _, w in ipairs(terminal_windows(state, tab)) do
+        apply_winbar(w)
+      end
     end
-    pcall(vim.cmd, "redrawstatus")
+    pcall(vim.cmd, "redrawstatus!")
     emit_tabs_changed()
     if opts.insert ~= false then
       vim.cmd("startinsert")
     end
   end)
+end
+
+-- Show the terminal in `slot` in the target window (see target_window),
+-- opening the side panel when no terminal window is open.
+function M.show(slot, opts)
+  local tab = vim.api.nvim_get_current_tabpage()
+  show_in(target_window(st(tab), tab), slot, opts)
 end
 
 -- Type `text` into the current side terminal (the one <C-t> would show) and
@@ -658,12 +747,50 @@ end
 -- <C-t>: toggle the side slot — close the window if open (buffers stay alive),
 -- else re-open showing the current tab.
 function M.toggle()
-  local state = st()
   local win = viewport()
   if win then
     pcall(vim.api.nvim_win_close, win, false)
-  else
-    M.show(current_slot(state) or BASE)
+    return
+  end
+  local tab = vim.api.nvim_get_current_tabpage()
+  local slot = hidden_slot(st(tab), tab)
+  if slot then
+    show_in(nil, slot)
+  end
+end
+
+-- <C-b>t: a terminal in the current window, the way :edit opens a file there
+-- (<C-o> goes back). It shows the most recent tab not already on screen.
+function M.here()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local state = st(tab)
+  local win = vim.api.nvim_get_current_win()
+  if slot_of_buf(vim.api.nvim_win_get_buf(win), state) then
+    return
+  end
+  local slot = hidden_slot(state, tab)
+  if not slot then
+    vim.notify("all " .. MAX .. " terminals are on screen", vim.log.levels.WARN)
+    return
+  end
+  show_in(win, slot)
+end
+
+-- <C-b>o: focus the next terminal window (tmux select-pane -t :.+).
+function M.cycle()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local state = st(tab)
+  local wins = terminal_windows(state, tab)
+  local from = target_window(state, tab)
+  for i, win in ipairs(wins) do
+    if win == from then
+      local nxt = wins[i % #wins + 1]
+      vim.api.nvim_set_current_win(nxt)
+      touch(state, select(2, slot_of_buf(vim.api.nvim_win_get_buf(nxt), state)))
+      pcall(vim.cmd, "redrawstatus!")
+      vim.cmd("startinsert")
+      return
+    end
   end
 end
 
@@ -740,15 +867,7 @@ function M.kill()
     return
   end
   state.slots[slot] = nil
-  local win = viewport()
-  if win and vim.api.nvim_win_get_buf(win) == term.buf then
-    local nxt = first_alive(state)
-    if nxt then
-      M.show(nxt)
-    else
-      pcall(vim.api.nvim_win_close, win, true)
-    end
-  end
+  vacate(state, vim.api.nvim_get_current_tabpage(), term.buf)
   shutdown(term)
   emit_tabs_changed()
 end
@@ -815,15 +934,7 @@ function M.transfer(dest)
   -- window never shows a non-terminal buffer for an adopting layout manager to
   -- eject.
   source.slots[slot] = nil
-  local win = viewport()
-  if win and vim.api.nvim_win_get_buf(win) == term.buf then
-    local nxt = first_alive(source)
-    if nxt then
-      M.show(nxt, { insert = false })
-    else
-      pcall(vim.api.nvim_win_close, win, true)
-    end
-  end
+  vacate(source, source_tab, term.buf)
   emit_tabs_changed(source_tab)
 
   target.slots[free] = term
@@ -920,20 +1031,35 @@ local function icon_hl(hl, base)
   return name
 end
 
--- The tmux-style tab strip, as a window-local winbar on the side window. Because
--- it's the winbar of fishmonger's own window it spans exactly that window -- no
--- screen-column math, and no commandeering the global tabline. The active tab is
--- highlighted; the trailing TabLineFill extends to the window's right edge. Each
--- label is a mouse-click target routing to fishmonger_tab_click.
+-- The tmux-style tab strip, as a window-local winbar on each terminal window.
+-- Because it's that window's winbar it spans exactly that window -- no
+-- screen-column math, and no commandeering the global tabline. The window's own
+-- tab is highlighted (dimmer when <C-b> targets another window), tabs on screen
+-- in another window are marked, and the trailing TabLineFill extends to the
+-- window's right edge. Each label is a mouse-click target routing to
+-- fishmonger_tab_click.
 --
 -- Each tab shows its terminal's status icon in that state's colour -- the same
 -- icon-and-highlight the agent view resolves (agent state first, OSC-title
 -- glyph as fallback). A terminal with no status to show (a plain shell) gets no
 -- icon at all rather than a placeholder.
 function M.winbar()
+  local win = vim.g.statusline_winid
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    win = vim.api.nvim_get_current_win()
+  end
+  local tab = vim.api.nvim_win_get_tabpage(win)
+  local state = st(tab)
+  local own = vim.api.nvim_win_get_buf(win)
+  local own_hl = target_window(state, tab) == win and "TabLineSel" or "FishmongerTabSelNC"
   local tabs = {}
-  for _, e in ipairs(managed()) do
-    local base = (e.slot == current_slot(st())) and "TabLineSel" or "TabLine"
+  for _, e in ipairs(managed(state)) do
+    local base = "TabLine"
+    if e.term.buf == own then
+      base = own_hl
+    elseif window_showing(tab, e.term.buf) then
+      base = "FishmongerTabElsewhere"
+    end
     local icon, hl = status_icon(e.term, term_title(e.term))
     local status = ""
     if icon and hl then
@@ -945,6 +1071,12 @@ function M.winbar()
     tabs[#tabs + 1] = ("%%%d@v:lua.fishmonger_tab_click@%%#%s#%s%%X"):format(e.slot, base, lbl)
   end
   return table.concat(tabs) .. "%#TabLineFill#"
+end
+
+-- Overridable defaults (a colorscheme or config setting them wins).
+local function default_highlights()
+  vim.api.nvim_set_hl(0, "FishmongerTabSelNC", { link = "StatusLineNC", default = true })
+  vim.api.nvim_set_hl(0, "FishmongerTabElsewhere", { link = "TabLineFill", default = true })
 end
 
 _G.fishmonger_winbar = M.winbar
@@ -964,6 +1096,9 @@ function M.setup(opts)
   config = vim.tbl_extend("force", config, opts or {})
 
   local grp = vim.api.nvim_create_augroup("Fishmonger", { clear = true })
+
+  default_highlights()
+  vim.api.nvim_create_autocmd("ColorScheme", { group = grp, callback = default_highlights })
 
   -- Agent statuses arrive from outside nvim entirely (a hook process writing a
   -- file), so they get their own watcher rather than an autocmd. A change is
@@ -1036,6 +1171,19 @@ function M.setup(opts)
   })
   -- tmux unzooms on selecting another pane; here that's entering another split
   -- (gf, <C-h>), which would otherwise land in a window hidden under the zoom.
+  -- Entering a terminal window makes its tab the current one, which is what
+  -- sends <C-b> from the editor back to the window you were last in.
+  vim.api.nvim_create_autocmd("WinEnter", {
+    group = grp,
+    callback = function()
+      local state = states[vim.api.nvim_get_current_tabpage()]
+      local _, term = state and slot_of_buf(vim.api.nvim_get_current_buf(), state)
+      if term then
+        touch(state, term)
+      end
+      pcall(vim.cmd, "redrawstatus!")
+    end,
+  })
   vim.api.nvim_create_autocmd("WinEnter", {
     group = grp,
     callback = function()
@@ -1087,6 +1235,10 @@ function M.setup_keymaps()
       M.show(tonumber(key))
     elseif key == "c" then
       M.new()
+    elseif key == "t" then
+      M.here()
+    elseif key == "o" then
+      M.cycle()
     elseif key == "a" then
       -- The agent view (lua/fishmonger/view.lua): every agent in every
       -- workspace, blocked ones first. On the prefix rather than its own ctrl
@@ -1122,7 +1274,7 @@ function M.setup_keymaps()
     { "n", "t" },
     "<C-b>",
     tab_prefix,
-    { desc = "Terminal prefix (<C-b>N tab / c new / z zoom / & kill / . move / mN to workspace / a agents)" }
+    { desc = "Terminal prefix (<C-b>N tab / c new / t here / o next window / z zoom / & kill / . move / mN to workspace / a agents)" }
   )
 end
 
@@ -1141,20 +1293,8 @@ function M.setup_exit()
       state.slots[slot] = nil
       agent.forget(args.buf) -- its cached shell pid is about to be reused by someone else
       vim.schedule(function()
-        local win = vim.api.nvim_tabpage_is_valid(tab) and side_of(tab)
-        if win and vim.api.nvim_win_get_buf(win) == args.buf then
-          local nxt, term = first_alive(state)
-          if not nxt then
-            pcall(vim.api.nvim_win_close, win, true)
-          elseif tab == vim.api.nvim_get_current_tabpage() then
-            M.show(nxt)
-          else
-            -- Another tabpage's terminal exited. Its replacement buffer already
-            -- exists, so swap it in without focusing -- M.show would drag us into
-            -- that tabpage (it sets the current window).
-            vim.api.nvim_win_set_buf(win, term.buf)
-            touch(state, term)
-          end
+        if vim.api.nvim_tabpage_is_valid(tab) then
+          vacate(state, tab, args.buf)
         end
         -- Clean up the dead buffer ("[Process exited]").
         if vim.api.nvim_buf_is_valid(args.buf) then
