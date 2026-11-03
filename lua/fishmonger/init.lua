@@ -206,14 +206,18 @@ end
 
 -- Start the shell in `buf`, which must already be shown in the current window:
 -- jobstart({term=true}) attaches to the current buffer and sizes the pty to the
--- current window. Re-assert the filetype (jobstart can reset it) and pass <C-k>
--- through -- the side terminal is full-height, so <C-k> window-nav is useless
--- here and the running app (e.g. Claude Code) should get the key instead.
--- Returns the job's channel, which M.send writes to.
+-- current window. Re-assert the filetype (jobstart can reset it). <C-k> moves
+-- up only to a pane above; with none, the program (Claude Code's kill-line)
+-- gets it. Returns the job's channel, which M.send writes to.
 local function start_job(buf)
   local chan = vim.fn.jobstart(config.shell, { term = true })
   vim.bo[buf].filetype = config.filetype
-  vim.keymap.set("t", "<C-k>", "<C-k>", { buffer = buf })
+  vim.keymap.set("t", "<C-k>", function()
+    if vim.fn.winnr("k") ~= vim.fn.winnr() then
+      return "<Cmd>lua require('fishmonger').select('k')<CR>"
+    end
+    return "<C-k>"
+  end, { buffer = buf, expr = true })
   return chan
 end
 
