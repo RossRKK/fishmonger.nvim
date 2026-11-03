@@ -661,6 +661,20 @@ describe("panes", function()
     assert.equals(1, terms.current)
   end)
 
+  it("moves <C-k> up to the pane above, else gives it to the program", function()
+    terms.show(1)
+    local side = terms.win
+    terms.split("below")
+    local function ctrl_k()
+      return vim.fn.maparg("<C-k>", "t", false, true).callback()
+    end
+
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(ctrl_k(), true, false, true), "x", false)
+    assert.equals(side, vim.api.nvim_get_current_win())
+    assert.equals(1, terms.current)
+    assert.equals("<C-k>", ctrl_k())
+  end)
+
   it("reads the pane keys after <C-b>", function()
     terms.setup_keymaps()
     terms.show(1)
