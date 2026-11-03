@@ -202,14 +202,11 @@ end
 
 -- Start the shell in `buf`, which must already be shown in the current window:
 -- jobstart({term=true}) attaches to the current buffer and sizes the pty to the
--- current window. Re-assert the filetype (jobstart can reset it) and pass <C-k>
--- through -- the side terminal is full-height, so <C-k> window-nav is useless
--- here and the running app (e.g. Claude Code) should get the key instead.
--- Returns the job's channel, which M.send writes to.
+-- current window. Re-assert the filetype (jobstart can reset it). Returns the
+-- job's channel, which M.send writes to.
 local function start_job(buf)
   local chan = vim.fn.jobstart(config.shell, { term = true })
   vim.bo[buf].filetype = config.filetype
-  vim.keymap.set("t", "<C-k>", "<C-k>", { buffer = buf })
   return chan
 end
 
@@ -1247,10 +1244,10 @@ function M.setup(opts)
   })
 end
 
--- Global toggle so <C-t> summons/hides the side terminal from anywhere.
 -- Called once from terminal.lua.
 function M.setup_keymaps()
-  vim.keymap.set({ "n", "t" }, "<C-t>", M.toggle, { desc = "Toggle side terminal" })
+  -- Normal mode only: programs in the terminal own their ctrl keys.
+  vim.keymap.set("n", "<C-t>", M.toggle, { desc = "Toggle side terminal" })
   -- <C-b> as a single tmux-style prefix, bound globally in normal + terminal
   -- mode. A single complete mapping fires immediately, then getcharstr() blocks
   -- for the follow-up key. Separate <C-b>1.. maps instead race the mapping
