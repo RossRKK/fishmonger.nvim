@@ -318,6 +318,15 @@ local function hidden_term(state, tab)
   end
 end
 
+-- The lowest slot with no terminal in it, or nil when all nine are taken.
+local function free_slot(state)
+  for i = BASE, MAX do
+    if not state.slots[i] then
+      return i
+    end
+  end
+end
+
 -- The slot a newly opened terminal window shows: the most recent hidden tab,
 -- else the lowest free slot. Nil when all nine are on screen.
 local function hidden_slot(state, tab)
@@ -325,11 +334,7 @@ local function hidden_slot(state, tab)
   if term then
     return slot_of_term(state, term)
   end
-  for i = BASE, MAX do
-    if not state.slots[i] then
-      return i
-    end
-  end
+  return free_slot(state)
 end
 
 -- A terminal window with no terminal left to show goes back to the buffer it
@@ -796,12 +801,10 @@ end
 
 -- <C-b>c: open the lowest unused slot.
 function M.new()
-  local state = st()
-  for i = BASE, MAX do
-    if not state.slots[i] then
-      M.show(i)
-      return
-    end
+  local slot = free_slot(st())
+  if slot then
+    M.show(slot)
+    return
   end
   vim.notify("all " .. MAX .. " terminal slots in use", vim.log.levels.WARN)
 end
@@ -929,13 +932,7 @@ function M.transfer(dest)
   end
 
   local target = st(dest)
-  local free
-  for i = BASE, MAX do
-    if not target.slots[i] then
-      free = i
-      break
-    end
-  end
+  local free = free_slot(target)
   if not free then
     vim.notify("all " .. MAX .. " terminal slots in use there", vim.log.levels.WARN)
     return false
