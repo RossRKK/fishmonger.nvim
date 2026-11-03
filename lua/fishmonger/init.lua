@@ -7,8 +7,9 @@
 -- kill-window), and <C-b>.{1-9} renumbers the current terminal to another slot
 -- (tmux move-window), and <C-b>m{1-9} carries the current terminal over to
 -- workspace N (tmux move-window -t other-session; a config numbers its
--- workspaces via setup({ workspace }), else N is the tabpage number). <C-t> toggles
--- the side slot from anywhere.
+-- workspaces via setup({ workspace }), else N is the tabpage number). <C-b>" and
+-- <C-b>% split a new shell into a pane, <C-b>x kills a pane, and <C-b> arrows
+-- move between panes. <C-t> toggles the side slot.
 --
 -- Model (the tmux-pane model): the side panel (M.win) lives in the right slot,
 -- and <C-b>t opens a terminal in any other window too. Every terminal window
@@ -124,13 +125,16 @@ local function current_slot(state)
   end
 end
 
+-- A tabpage's side windows: the panel and any panes split from it.
+local function side_windows(tab)
+  return vim.tbl_filter(function(win)
+    return vim.w[win][SIDE]
+  end, vim.api.nvim_tabpage_list_wins(tab))
+end
+
 -- A tabpage's side panel, or nil when it is closed.
 local function side_of(tab)
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-    if vim.w[win][SIDE] then
-      return win
-    end
-  end
+  return side_windows(tab)[1]
 end
 
 local function viewport()
@@ -749,15 +753,17 @@ function M.send(text)
   return true
 end
 
--- <C-t>: toggle the side slot — close the window if open (buffers stay alive),
+-- <C-t>: toggle the side slot — close its windows if open (buffers stay alive),
 -- else re-open showing the current tab.
 function M.toggle()
-  local win = viewport()
-  if win then
-    pcall(vim.api.nvim_win_close, win, false)
+  local tab = vim.api.nvim_get_current_tabpage()
+  local wins = side_windows(tab)
+  if #wins > 0 then
+    for _, win in ipairs(wins) do
+      pcall(vim.api.nvim_win_close, win, false)
+    end
     return
   end
-  local tab = vim.api.nvim_get_current_tabpage()
   local slot = hidden_slot(st(tab), tab)
   if slot then
     show_in(nil, slot)
@@ -796,6 +802,65 @@ function M.cycle()
       vim.cmd("startinsert")
       return
     end
+  end
+end
+
+-- <C-b>" / <C-b>%: tmux split-window -- split the target terminal window and
+-- start a new shell in the new pane. A pane split from the side panel is a side
+-- window too, so a layout manager docks it alongside the panel.
+---@param direction "below"|"right"
+function M.split(direction)
+  local tab = vim.api.nvim_get_current_tabpage()
+  local state = st(tab)
+  local from = target_window(state, tab)
+  local slot = free_slot(state)
+  if not from then
+    return
+  elseif not slot then
+    vim.notify("all " .. MAX .. " terminal slots in use", vim.log.levels.WARN)
+    return
+  end
+  -- Open on a placeholder with autocmds off: a layout manager places a window
+  -- when a buffer enters it, by which point the side mark must be there.
+  local placeholder = vim.api.nvim_create_buf(false, true)
+  vim.bo[placeholder].bufhidden = "wipe"
+  local win = vim.api.nvim_open_win(placeholder, false, { split = direction, win = from, noautocmd = true })
+  vim.w[win][SIDE] = vim.w[from][SIDE]
+  show_in(win, slot)
+end
+
+-- <C-b>x: tmux kill-pane -- shut down the target terminal's shell and close its
+-- window. The last window can't close, so it takes another tab as after <C-b>&.
+function M.kill_pane()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local state = st(tab)
+  local win = target_window(state, tab)
+  if not win then
+    return
+  end
+  local slot, term = slot_of_buf(vim.api.nvim_win_get_buf(win), state)
+  if not slot then
+    return
+  end
+  state.slots[slot] = nil
+  if not pcall(vim.api.nvim_win_close, win, true) then
+    vacate(state, tab, term.buf)
+  end
+  shutdown(term)
+  emit_tabs_changed()
+end
+
+-- <C-b> arrow: tmux select-pane, reachable from a terminal whose program keeps
+-- the ctrl keys (the side terminal passes <C-k> through).
+---@param direction "h"|"j"|"k"|"l"
+function M.select(direction)
+  vim.cmd("wincmd " .. direction)
+  local state = st()
+  local _, term = slot_of_buf(vim.api.nvim_get_current_buf(), state)
+  if term then
+    touch(state, term)
+    pcall(vim.cmd, "redrawstatus!")
+    vim.cmd("startinsert")
   end
 end
 
@@ -1256,6 +1321,10 @@ function M.setup_keymaps()
   -- when the panel is closed). In normal mode an unrecognised follow-up key
   -- falls through to the builtin <C-b> (page back) plus that key, so paging
   -- still works — just one keystroke later than stock.
+  local arrows = {}
+  for lhs, direction in pairs({ ["<Left>"] = "h", ["<Down>"] = "j", ["<Up>"] = "k", ["<Right>"] = "l" }) do
+    arrows[vim.api.nvim_replace_termcodes(lhs, true, false, true)] = direction
+  end
   local function tab_prefix()
     local ok, key = pcall(vim.fn.getcharstr)
     if not ok or key == "" then
@@ -1278,6 +1347,14 @@ function M.setup_keymaps()
       require("fishmonger.view").popup()
     elseif key == "z" then
       M.zoom()
+    elseif key == '"' then
+      M.split("below")
+    elseif key == "%" then
+      M.split("right")
+    elseif key == "x" then
+      M.kill_pane()
+    elseif arrows[key] then
+      M.select(arrows[key])
     elseif key == "&" then
       M.kill()
     elseif key == "." then
@@ -1304,7 +1381,9 @@ function M.setup_keymaps()
     { "n", "t" },
     "<C-b>",
     tab_prefix,
-    { desc = "Terminal prefix (<C-b>N tab / c new / t here / o next window / z zoom / & kill / . move / mN to workspace / a agents)" }
+    {
+      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / & kill / . move / mN to workspace / a agents)',
+    }
   )
 end
 
