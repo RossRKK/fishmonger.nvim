@@ -533,6 +533,153 @@ describe("terminal windows", function()
   end)
 end)
 
+-- Panes (tmux split-window / kill-pane / select-pane): more terminal windows,
+-- each showing one of the tabpage's shared tabs.
+describe("panes", function()
+  local terms, editor, file
+
+  --- The slot a window shows, or nil when it shows something else.
+  local function slot_in(win)
+    local buf = vim.api.nvim_win_get_buf(win)
+    for slot, term in pairs(terms.slots) do
+      if term.buf == buf then
+        return slot
+      end
+    end
+  end
+
+  before_each(function()
+    terms = fresh_terms()
+    editor = vim.api.nvim_get_current_win()
+    file = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(file, "fishmonger-spec-pane-" .. file)
+    vim.api.nvim_win_set_buf(editor, file)
+  end)
+
+  it("splits the side panel below into a new shell that is a side window too", function()
+    terms.show(1)
+    local side = terms.win
+    terms.split("below")
+    local pane = vim.api.nvim_get_current_win()
+
+    assert.are_not.equals(side, pane)
+    assert.same({ 1, 2 }, slots_of(terms))
+    assert.equals(1, slot_in(side))
+    assert.equals(2, slot_in(pane))
+    assert.equals(2, terms.current)
+    assert.is_true(vim.w[pane].fishmonger_side)
+    local above, below = vim.api.nvim_win_get_position(side), vim.api.nvim_win_get_position(pane)
+    assert.equals(above[2], below[2])
+    assert.is_true(below[1] > above[1])
+  end)
+
+  -- A layout manager (edgy) places a window when a buffer enters it, so the
+  -- side mark has to be there already or the pane is evicted from the column.
+  it("marks a side pane before its terminal enters it", function()
+    terms.show(1)
+    local marked
+    vim.api.nvim_create_autocmd("BufWinEnter", {
+      once = true,
+      callback = function()
+        marked = vim.w.fishmonger_side
+      end,
+    })
+    terms.split("below")
+    assert.is_true(marked)
+  end)
+
+  it("splits an editor-area terminal to the right without docking it", function()
+    terms.here()
+    terms.split("right")
+    local pane = vim.api.nvim_get_current_win()
+
+    assert.equals(1, slot_in(editor))
+    assert.equals(2, slot_in(pane))
+    assert.is_nil(vim.w[pane].fishmonger_side)
+    local left, right = vim.api.nvim_win_get_position(editor), vim.api.nvim_win_get_position(pane)
+    assert.equals(left[1], right[1])
+    assert.is_true(right[2] > left[2])
+  end)
+
+  it("warns and opens no window when every slot is taken", function()
+    for i = 1, 9 do
+      terms.show(i)
+    end
+    local warned
+    vim.notify = function(msg)
+      warned = msg
+    end ---@diagnostic disable-line: duplicate-set-field
+    local before = #vim.api.nvim_tabpage_list_wins(0)
+
+    terms.split("below")
+
+    assert.matches("all 9 terminal slots in use", warned)
+    assert.equals(before, #vim.api.nvim_tabpage_list_wins(0))
+  end)
+
+  it("kills a pane's shell and closes its window, leaving the other pane", function()
+    terms.show(1)
+    local side = terms.win
+    terms.split("below")
+    local pane = vim.api.nvim_get_current_win()
+    local buf = terms.slots[2].buf
+
+    terms.kill_pane()
+
+    assert.same({ 1 }, slots_of(terms))
+    assert.is_false(vim.api.nvim_win_is_valid(pane))
+    assert.is_false(vim.api.nvim_buf_is_valid(buf))
+    assert.equals(1, slot_in(side))
+  end)
+
+  it("keeps the last window, back on its file, when killing the pane in it", function()
+    terms.here()
+    terms.kill_pane()
+
+    assert.same({}, slots_of(terms))
+    assert.is_true(vim.api.nvim_win_is_valid(editor))
+    assert.equals(file, vim.api.nvim_win_get_buf(editor))
+  end)
+
+  it("hides every side pane on toggle, keeping their tabs", function()
+    terms.show(1)
+    terms.split("below")
+    terms.toggle()
+
+    assert.equals(1, #vim.api.nvim_tabpage_list_wins(0))
+    assert.same({ 1, 2 }, slots_of(terms))
+    assert.is_true(alive(terms, 1) and alive(terms, 2))
+  end)
+
+  it("moves to the pane in a direction", function()
+    terms.show(1)
+    local side = terms.win
+    terms.split("below")
+    terms.select("k")
+
+    assert.equals(side, vim.api.nvim_get_current_win())
+    assert.equals(1, terms.current)
+  end)
+
+  it("reads the pane keys after <C-b>", function()
+    terms.setup_keymaps()
+    terms.show(1)
+    vim.cmd("stopinsert")
+    local function press(keys)
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
+    end
+
+    press('<C-b>"')
+    assert.same({ 1, 2 }, slots_of(terms))
+    vim.cmd("stopinsert")
+    press("<C-b><Up>")
+    assert.equals(1, terms.current)
+    vim.cmd("stopinsert")
+    press("<C-b>x")
+    assert.same({ 2 }, slots_of(terms))
+  end)
+end)
+
 describe("terms.send", function()
   local terms, sent, real_chan_send
 
