@@ -221,3 +221,114 @@ describe("agents across tabpages", function()
     assert.equals("busy", out[2].state)
   end)
 end)
+
+--- A process's start time (field 22 of /proc/<pid>/stat), as the hook records it.
+local function start_time(pid)
+  local f = assert(io.open("/proc/" .. pid .. "/stat"))
+  local stat = f:read("*a")
+  f:close()
+  return tonumber(vim.split(stat:match(".*%) (.*)"), " ")[20])
+end
+
+--- Write a task file as the hook would, with its output file created now.
+---@return string output path
+local function write_task(session, id, fields)
+  local output = dir .. "/" .. id .. ".output"
+  assert(io.open(output, "w")):close()
+  local record = vim.tbl_extend("force", {
+    session = session,
+    id = id,
+    description = "Run " .. id,
+    command = "make " .. id,
+    output = output,
+    pid = 2 ^ 30,
+    pid_start = 1,
+  }, fields or {})
+  local f = assert(io.open(dir .. "/" .. session .. "." .. id .. ".task", "w"))
+  f:write(vim.json.encode(record))
+  f:close()
+  return output
+end
+
+--- A live stand-in for a background task: its pid and start time as the hook records them.
+local function running_task()
+  local proc = vim.system({ "sleep", "60" })
+  return proc, { pid = proc.pid, pid_start = start_time(proc.pid) }
+end
+
+describe("agent background tasks", function()
+  it("lists a session's tasks in launch order, with what each one is", function()
+    local agent = fresh_agent()
+    write_session("s1", {})
+    local first = write_task("s1", "b1", { description = "Run the tests", command = "cargo test" })
+    write_task("s1", "b2")
+    reload(agent)
+
+    local tasks = agent.tasks("s1")
+    assert.same(
+      { "b1", "b2" },
+      vim.tbl_map(function(t)
+        return t.id
+      end, tasks)
+    )
+    assert.equals("Run the tests", tasks[1].description)
+    assert.equals("cargo test", tasks[1].command)
+    assert.equals(first, tasks[1].output)
+  end)
+
+  it("treats a task as running only while its pid still has the recorded start time", function()
+    local agent = fresh_agent()
+    write_session("s1", {})
+    local proc, live = running_task()
+    write_task("s1", "live", live)
+    write_task("s1", "reused", { pid = live.pid, pid_start = live.pid_start - 1 })
+    reload(agent)
+
+    local tasks = agent.tasks("s1")
+    assert.is_nil(tasks[1].finished)
+    assert.is_number(tasks[2].finished)
+    proc:kill(9)
+    proc:wait()
+  end)
+
+  it("notices a task finishing, though no file changes when it does", function()
+    local agent = fresh_agent()
+    write_session("s1", { state = "done" })
+    local proc, live = running_task()
+    write_task("s1", "b1", live)
+    local changes = 0
+    agent.setup({ dir = dir }, function()
+      changes = changes + 1
+    end)
+    assert.is_not_nil(agent._spin.timer)
+
+    proc:kill(9)
+    proc:wait()
+    agent._tick()
+
+    assert.is_number(agent.tasks("s1")[1].finished)
+    assert.equals(1, changes)
+    assert.is_nil(agent._spin.timer)
+  end)
+
+  it("forgets a dismissed task", function()
+    local agent = fresh_agent()
+    write_session("s1", {})
+    write_task("s1", "b1")
+    reload(agent)
+
+    agent.dismiss("s1", "b1")
+
+    assert.same({}, agent.tasks("s1"))
+    assert.equals(0, vim.fn.filereadable(dir .. "/s1.b1.task"))
+  end)
+
+  it("reaps a dead session's tasks with it", function()
+    local agent = fresh_agent()
+    write_session("dead", { agent_pid = 2 ^ 30 })
+    write_task("dead", "b1")
+    reload(agent)
+
+    assert.equals(0, vim.fn.filereadable(dir .. "/dead.b1.task"))
+  end)
+end)

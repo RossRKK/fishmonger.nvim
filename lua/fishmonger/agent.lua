@@ -68,6 +68,16 @@ local config = {
 --   { session, state, detail, cwd, pids = {…}, agent_pid }
 local sessions = {}
 
+-- session id -> its background tasks in launch order, each
+--   { id, description, command, output, started, finished? }
+-- where `finished` (epoch seconds) is absent exactly while the task runs.
+-- The hook records pid + start time rather than a status: no event marks a
+-- task's end, so whether it is still running is read off /proc.
+local tasks = {}
+
+-- The running tasks' { pid, pid_start }, which the spinner tick re-checks.
+local running = {}
+
 -- The on_change callback given to setup(), kept here so refresh() can repaint
 -- through the same path the watcher does.
 local notify = function() end
@@ -99,31 +109,102 @@ local function alive(record)
   return pid ~= nil and vim.uv.fs_stat("/proc/" .. pid) ~= nil
 end
 
---- Re-read every session file. Cheap (a handful of small files) and simpler than
---- tracking individual file events, which arrive without reliable names.
+--- A process's start time, field 22 of /proc/<pid>/stat, or nil once it has
+--- exited. comm (field 2) may contain spaces and ")", so fields are counted
+--- from the last ")".
+---@param pid integer
+---@return integer?
+local function start_time(pid)
+  local f = io.open("/proc/" .. pid .. "/stat", "r")
+  if not f then
+    return nil
+  end
+  local stat = f:read("*a")
+  f:close()
+  local after_comm = stat:match(".*%) (.*)")
+  return after_comm and tonumber(vim.split(after_comm, " ")[20])
+end
+
+--- When a task finished (its output's last write), or nil while it runs. A
+--- recycled pid has a different start time, so it doesn't count as the task.
+---@param record table the hook's task record
+---@param stat table the output file's fs_stat
+---@return integer?
+local function finished_at(record, stat)
+  if start_time(record.pid) == record.pid_start then
+    return nil
+  end
+  return stat.mtime.sec
+end
+
+--- A hook task record as a task, or nil when it is unusable (its output gone).
+---@param record table?
+---@return table?
+local function parse_task(record)
+  local stat = record and record.output and vim.uv.fs_stat(record.output)
+  if not (stat and record.session and record.id) then
+    return nil
+  end
+  return {
+    id = record.id,
+    description = record.description,
+    command = record.command,
+    output = record.output,
+    started = stat.birthtime.sec + stat.birthtime.nsec / 1e9,
+    finished = finished_at(record, stat),
+  }
+end
+
+--- Re-read every session and task file. Cheap (a handful of small files) and
+--- simpler than tracking individual file events, which arrive without reliable
+--- names.
 local function reload()
-  sessions = {}
+  sessions, tasks, running = {}, {}, {}
   local handle = vim.uv.fs_scandir(config.dir)
   if not handle then
     return
   end
+  local task_records = {}
   while true do
     local name = vim.uv.fs_scandir_next(handle)
     if not name then
       break
     end
+    local path = config.dir .. "/" .. name
     if name:match("%.json$") then
-      local record = read_json(config.dir .. "/" .. name)
+      local record = read_json(path)
       if record and record.session then
         if alive(record) then
           sessions[record.session] = record
         else
           -- Reap it here rather than leaving it for the next session to trip
           -- over: this is the only process that ever notices.
-          os.remove(config.dir .. "/" .. name)
+          os.remove(path)
+          for _, task_file in
+            ipairs(vim.fn.glob(config.dir .. "/" .. record.session .. ".*.task", true, true))
+          do
+            os.remove(task_file)
+          end
         end
       end
+    elseif name:match("%.task$") then
+      task_records[#task_records + 1] = read_json(path)
     end
+  end
+  for _, record in ipairs(task_records) do
+    local task = parse_task(record)
+    if task then
+      tasks[record.session] = tasks[record.session] or {}
+      table.insert(tasks[record.session], task)
+      if not task.finished then
+        running[#running + 1] = { pid = record.pid, pid_start = record.pid_start }
+      end
+    end
+  end
+  for _, list in pairs(tasks) do
+    table.sort(list, function(a, b)
+      return a.started < b.started
+    end)
   end
 end
 
@@ -170,6 +251,9 @@ end
 local spin = { timer = nil, frame = 1, on_tick = function() end }
 
 local function spinning_somewhere()
+  if #running > 0 then
+    return true
+  end
   for _, record in pairs(sessions) do
     -- Unknown states take the busy look (see M.look), so they spin too.
     local look = M.states[record.state]
@@ -181,10 +265,17 @@ local function spinning_somewhere()
 end
 
 --- Advance the spinner a frame. An agent killed mid-turn never writes another
---- file, so without the liveness check its "busy" would spin forever.
+--- file, so without the liveness check its "busy" would spin forever; a task
+--- finishing writes none either.
 local function tick()
   for _, record in pairs(sessions) do
     if not alive(record) then
+      M.refresh()
+      return
+    end
+  end
+  for _, probe in ipairs(running) do
+    if start_time(probe.pid) ~= probe.pid_start then
       M.refresh()
       return
     end
@@ -234,6 +325,23 @@ function M.refresh()
   reload()
   sync_spinner()
   notify()
+end
+
+--- A session's background tasks in launch order: `{ id, description, command,
+--- output, started, finished? }`, times in epoch seconds, `finished` absent
+--- while the task runs.
+---@param session string
+---@return table[]
+function M.tasks(session)
+  return tasks[session] or {}
+end
+
+--- Forget a task, finished or not; the task itself is Claude's to stop.
+---@param session string
+---@param id string
+function M.dismiss(session, id)
+  os.remove(config.dir .. "/" .. session .. "." .. id .. ".task")
+  M.refresh()
 end
 
 --- Every known session, live agents only. Terminal-matching is the caller's job
