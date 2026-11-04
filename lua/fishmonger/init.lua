@@ -1291,6 +1291,8 @@ function M.setup(opts)
       end
     end
   end)
+  -- Yanks of Claude's replies come back unwrapped (fishmonger/yank.lua).
+  require("fishmonger.yank").setup(config.filetype)
   -- The background-task list under each agent's terminal.
   require("fishmonger.tasks").setup({
     terminal_windows = function(tab)
