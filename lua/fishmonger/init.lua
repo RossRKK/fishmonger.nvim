@@ -1291,6 +1291,19 @@ function M.setup(opts)
       end
     end
   end)
+  -- The background-task list under each agent's terminal.
+  require("fishmonger.tasks").setup({
+    terminal_windows = function(tab)
+      return terminal_windows(st(tab), tab)
+    end,
+    session_of = function(buf)
+      local record = agent.for_buf(buf, shell_pid)
+      return record and record.session
+    end,
+    tasks_of = agent.tasks,
+    open_output = M.open_output,
+    side_var = SIDE,
+  })
   -- term_title changes arrive via TermRequest (Claude Code updates it live,
   -- including its input-needed marker); repaint the winbar and re-bubble the
   -- OS title on those. Defer the bubble: b:term_title is applied after the
