@@ -12,7 +12,7 @@ local COLS = 103
 
 --- `unwrap` for a yank of whole rows, with nothing after it in the buffer.
 local function unwrap(rows, after)
-  return yank.unwrap(rows, rows, after or {}, COLS)
+  return yank.unwrap(rows, rows, after or {}, COLS, 0)
 end
 
 describe("yank.unwrap", function()
@@ -24,7 +24,7 @@ describe("yank.unwrap", function()
     }
 
     assert.same({
-      "  Probe paragraph: this is one long markdown paragraph written as a single source line, so Claude has"
+      "Probe paragraph: this is one long markdown paragraph written as a single source line, so Claude has"
         .. " to wrap it at least twice at this terminal width, and none of those wrap breaks should carry a"
         .. " marker, while the very end of the paragraph should.",
     }, unwrap(rows))
@@ -33,7 +33,7 @@ describe("yank.unwrap", function()
   it("keeps every real newline, and the blank rows between paragraphs", function()
     local rows = { "  - Short item." .. M, "  - Another." .. M, "", "  Last line." .. M }
 
-    assert.same({ "  - Short item.", "  - Another.", "", "  Last line." }, unwrap(rows))
+    assert.same({ "- Short item.", "- Another.", "", "Last line." }, unwrap(rows))
   end)
 
   it("drops a list item's hanging indent where it wrapped", function()
@@ -43,7 +43,7 @@ describe("yank.unwrap", function()
     }
 
     assert.same({
-      "  - A list item that is also long enough to wrap onto a second row at this width, so its continuation"
+      "- A list item that is also long enough to wrap onto a second row at this width, so its continuation"
         .. " row gets the hanging indent rather than the plain margin.",
     }, unwrap(rows))
   end)
@@ -51,7 +51,23 @@ describe("yank.unwrap", function()
   it("joins a row cut mid-word at the edge without adding a space", function()
     local long = "  " .. ("x"):rep(COLS - 2)
 
-    assert.same({ long .. "yz" }, unwrap({ long, "  yz" .. M }))
+    assert.same({ long:sub(3) .. "yz" }, unwrap({ long, "  yz" .. M }))
+  end)
+
+  it("drops Claude's margin from every real line, keeping the bullet and deeper indents", function()
+    local rows =
+      { "● Opening line." .. M, "  - item" .. M, "    - nested" .. M, "      code indent" .. M }
+
+    assert.same({ "● Opening line.", "- item", "  - nested", "    code indent" }, unwrap(rows))
+  end)
+
+  it("drops only what is left of the margin when a charwise yank starts inside it", function()
+    local source = { "  - item" .. M, "  next" .. M }
+
+    assert.same(
+      { "- item", "next" },
+      yank.unwrap({ " - item" .. M, "  next" .. M }, source, {}, COLS, 1)
+    )
   end)
 
   it("leaves rows alone that no mark closes: tool output, tables, rules", function()
@@ -76,14 +92,11 @@ describe("yank.unwrap", function()
         "  stops here",
       }
 
-      local out = yank.unwrap(rows, rows, { "  before the paragraph ends." .. M }, COLS)
+      local out = yank.unwrap(rows, rows, { "  before the paragraph ends." .. M }, COLS, 0)
 
-      assert.same(
-        {
-          "  first row of a paragraph that Claude wrapped at the terminal edge, and the yank stops here",
-        },
-        out
-      )
+      assert.same({
+        "first row of a paragraph that Claude wrapped at the terminal edge, and the yank stops here",
+      }, out)
     end
   )
 
@@ -93,7 +106,7 @@ describe("yank.unwrap", function()
       "  to wrap it." .. M,
     }
 
-    local out = yank.unwrap({ "so Claude has", "  to wrap" }, source, {}, COLS)
+    local out = yank.unwrap({ "so Claude has", "  to wrap" }, source, {}, COLS, 88)
 
     assert.same({ "so Claude has to wrap" }, out)
   end)
@@ -115,7 +128,7 @@ describe("yank on TextYankPost", function()
 
     vim.cmd("normal! ggVjy")
 
-    assert.same({ "  a wrapped reply." }, vim.fn.getreg('"', 1, true))
+    assert.same({ "a wrapped reply." }, vim.fn.getreg('"', 1, true))
   end)
 
   it("leaves a yank with no marks in it exactly as it was", function()

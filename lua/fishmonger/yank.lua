@@ -11,8 +11,11 @@ local M = {}
 
 local MARK = "\226\128\140" -- U+200C
 
+-- The blank columns Claude draws left of a reply's rows (the bullet's, on its first).
+local MARGIN = 2
+
 -- Defined below, in top-down order.
-local on_yank, wraps, is_marked, is_blank, rows_after, write_register
+local on_yank, wraps, drop_margin, is_marked, is_blank, rows_after, write_register
 
 --- Unwrap yanks in buffers of `filetype` (fishmonger's terminals).
 ---@param filetype string
@@ -31,13 +34,15 @@ end
 --- `source` holds the whole buffer row each yanked row came from (a charwise
 --- yank's first and last rows are fragments of theirs), `after` the buffer rows
 --- following the yank up to the next blank, and `cols` the wrap width: a row
---- that fills it was cut mid-word, so it joins without a space.
+--- that fills it was cut mid-word, so it joins without a space. `first_col` is
+--- where in its row the yank starts, so a start inside the margin drops the rest.
 ---@param rows string[]
 ---@param source string[]
 ---@param after string[]
 ---@param cols integer
+---@param first_col integer
 ---@return string[]
-function M.unwrap(rows, source, after, cols)
+function M.unwrap(rows, source, after, cols, first_col)
   local wrapped = wraps(source, after)
   local out, current = {}, nil
   for i, row in ipairs(rows) do
@@ -45,6 +50,8 @@ function M.unwrap(rows, source, after, cols)
     if current then
       local gap = vim.fn.strdisplaywidth(source[i - 1]) >= cols and "" or " "
       current = current:gsub("%s+$", "") .. gap .. text:gsub("^%s+", "")
+    elseif wrapped[i] or is_marked(source[i]) then
+      current = drop_margin(text, i == 1 and first_col or 0)
     else
       current = text
     end
@@ -62,11 +69,12 @@ function on_yank(buf)
   if ev.operator ~= "y" or blockwise or not table.concat(ev.regcontents):find(MARK, 1, true) then
     return
   end
-  local first = vim.api.nvim_buf_get_mark(buf, "[")[1]
+  local first, first_col = unpack(vim.api.nvim_buf_get_mark(buf, "["))
   local last = first + #ev.regcontents - 1
   local source = vim.api.nvim_buf_get_lines(buf, first - 1, last, false)
   local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
-  local rows = M.unwrap(ev.regcontents, source, rows_after(buf, last), info.width - info.textoff)
+  local rows =
+    M.unwrap(ev.regcontents, source, rows_after(buf, last), info.width - info.textoff, first_col)
   write_register(ev.regname, rows, ev.regtype)
 end
 
@@ -85,6 +93,13 @@ function wraps(source, after)
     end
   end
   return out
+end
+
+--- `text` without the part of Claude's blank margin it holds, given that it
+--- starts at column `col` of its row; a bullet is not blank, so it stays.
+function drop_margin(text, col)
+  local held = math.max(0, MARGIN - col)
+  return text:sub(1, held):match("^ *$") and text:sub(held + 1) or text
 end
 
 function is_marked(row)
