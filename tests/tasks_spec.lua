@@ -78,6 +78,19 @@ describe("task list", function()
     assert.is_true(list_pos[1] > term_pos[1])
   end)
 
+  it("publishes the height it wants, for a layout manager that owns the window's size", function()
+    local by_session = { s1 = { task(), task({ id = "b2" }) } }
+    local term_win = fixture(by_session)
+    tasks_ui.sync()
+    local list = list_under(term_win)
+    assert.equals(2, vim.w[list].fishmonger_tasks_height)
+
+    by_session.s1 = { task() }
+    tasks_ui.sync()
+
+    assert.equals(1, vim.w[list].fishmonger_tasks_height)
+  end)
+
   it("says what each task is and how long it has run", function()
     local term_win = fixture({ s1 = { task() } })
 

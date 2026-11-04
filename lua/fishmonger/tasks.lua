@@ -198,6 +198,8 @@ function render(win, session, tasks)
   vim.b[buf].fishmonger_session = session
   vim.b[buf].fishmonger_tasks = tasks
   local height = math.min(#tasks, MAX_HEIGHT)
+  -- A layout manager that sizes its windows itself (edgy) would undo the resize.
+  vim.w[win].fishmonger_tasks_height = height
   if vim.api.nvim_win_get_height(win) ~= height then
     vim.api.nvim_win_set_height(win, height)
   end
