@@ -1071,3 +1071,99 @@ describe("terms.title_icon", function()
     assert.is_nil(terms.title_icon(nil))
   end)
 end)
+
+describe("terms.open_output", function()
+  local terms, output
+  before_each(function()
+    terms = fresh_terms()
+    terms.show(1)
+    output = vim.fn.tempname()
+  end)
+
+  --- Append `text` to the task's output file, as the task would.
+  local function append(text)
+    local f = assert(io.open(output, "a"))
+    f:write(text)
+    f:close()
+  end
+
+  --- The pane's visible text, once nvim has drawn what was sent to it.
+  local function pane_text(pane, expect)
+    local buf = vim.api.nvim_win_get_buf(pane)
+    local text
+    vim.wait(2000, function()
+      text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+      return text:find(expect, 1, true) ~= nil
+    end)
+    return text
+  end
+
+  it("shows the output in a pane below its terminal, docked with it and not a tab", function()
+    append("line one\n")
+    local term_win = terms.win
+
+    terms.open_output(output, term_win)
+
+    local pane = vim.api.nvim_get_current_win()
+    assert.are_not.equal(term_win, pane)
+    assert.is_true(vim.api.nvim_win_get_position(pane)[1] > vim.api.nvim_win_get_position(term_win)[1])
+    assert.truthy(pane_text(pane, "line one"):find("line one", 1, true))
+    assert.is_true(vim.w[pane].fishmonger_side)
+    assert.same({ 1 }, slots_of(terms))
+  end)
+
+  it("lands in normal mode, so the output is navigated like any buffer", function()
+    append("line one\n")
+
+    terms.open_output(output, terms.win)
+
+    assert.equals("nt", vim.api.nvim_get_mode().mode)
+  end)
+
+  it("keeps up with output appended after it opened", function()
+    append("line one\n")
+    terms.open_output(output, terms.win)
+    local pane = vim.api.nvim_get_current_win()
+
+    append("line two\n")
+
+    assert.truthy(pane_text(pane, "line two"):find("line two", 1, true))
+  end)
+
+  it("puts each line of output on its own row", function()
+    append("line one\nline two\n")
+
+    terms.open_output(output, terms.win)
+
+    local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+    pane_text(vim.api.nvim_get_current_win(), "line two")
+    local rows = vim.api.nvim_buf_get_lines(buf, 0, 2, false)
+    assert.same({ "line one", "line two" }, rows)
+  end)
+
+  it("closes on q", function()
+    append("line one\n")
+    local term_win = terms.win
+    terms.open_output(output, term_win)
+    local pane = vim.api.nvim_get_current_win()
+
+    vim.api.nvim_feedkeys("q", "x", false)
+
+    assert.is_false(vim.api.nvim_win_is_valid(pane))
+    assert.is_true(vim.api.nvim_win_is_valid(term_win))
+  end)
+
+  it("goes back to the pane already showing that output rather than opening another", function()
+    append("line one\n")
+    local term_win = terms.win
+    terms.open_output(output, term_win)
+    local pane = vim.api.nvim_get_current_win()
+    vim.api.nvim_set_current_win(term_win)
+    local windows = #vim.api.nvim_tabpage_list_wins(0)
+
+    terms.open_output(output, term_win)
+
+    assert.equals(pane, vim.api.nvim_get_current_win())
+    assert.equals(windows, #vim.api.nvim_tabpage_list_wins(0))
+  end)
+end)
