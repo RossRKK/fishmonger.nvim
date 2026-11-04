@@ -833,6 +833,87 @@ function M.split(direction)
   show_in(win, slot)
 end
 
+local follow_file -- defined after its caller
+
+-- A background task's output in a pane under `term_win`, or the pane already
+-- showing it. The file is drawn into a process-less terminal (nvim_open_term),
+-- so its colours render while the pane stays an ordinary buffer: vim motions,
+-- search and yank, no pager. It follows while the cursor is on the last line,
+-- like any terminal. Not a tab: q closes it. The terminal filetype docks it
+-- with its terminal.
+---@param path string
+---@param term_win integer
+function M.open_output(path, term_win)
+  local tab = vim.api.nvim_win_get_tabpage(term_win)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if vim.b[vim.api.nvim_win_get_buf(win)].fishmonger_output == path then
+      vim.api.nvim_set_current_win(win)
+      return
+    end
+  end
+  local placeholder = vim.api.nvim_create_buf(false, true)
+  vim.bo[placeholder].bufhidden = "wipe"
+  local win = vim.api.nvim_open_win(placeholder, false, { split = "below", win = term_win, noautocmd = true })
+  vim.w[win][SIDE] = vim.w[term_win][SIDE]
+  local buf = make_term_buf()
+  vim.bo[buf].bufhidden = "wipe"
+  vim.b[buf].fishmonger_output = path
+  vim.api.nvim_win_set_buf(win, buf)
+  for name, value in pairs({ number = false, relativenumber = false, signcolumn = "no" }) do
+    vim.api.nvim_set_option_value(name, value, { scope = "local", win = win })
+  end
+  local chan = vim.api.nvim_open_term(buf, {})
+  vim.bo[buf].filetype = config.filetype
+  local watcher = follow_file(path, function(bytes)
+    if vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_chan_send(chan, bytes)
+    end
+  end)
+  vim.api.nvim_create_autocmd("BufWipeout", { buffer = buf, once = true, callback = watcher.stop })
+  vim.keymap.set("n", "q", function()
+    pcall(vim.api.nvim_win_close, win, true)
+  end, { buffer = buf, desc = "Close the task output" })
+  vim.api.nvim_set_current_win(win)
+  vim.cmd("normal! G")
+end
+
+-- Hand `on_bytes` the end of the file at `path` (the last few MB: a terminal
+-- keeps only `scrollback` lines anyway), then whatever is appended to it.
+-- Returns `{ stop = fn }`.
+local OUTPUT_TAIL = 4 * 1024 * 1024
+function follow_file(path, on_bytes)
+  local offset = math.max(0, (vim.uv.fs_stat(path) or { size = 0 }).size - OUTPUT_TAIL)
+  local function read_new()
+    local stat = vim.uv.fs_stat(path)
+    if not stat then
+      return
+    end
+    -- Truncated (a rerun into the same file): start over from the top.
+    offset = stat.size < offset and 0 or offset
+    if stat.size == offset then
+      return
+    end
+    local fd = vim.uv.fs_open(path, "r", 0)
+    if fd then
+      local bytes = vim.uv.fs_read(fd, stat.size - offset, offset) or ""
+      vim.uv.fs_close(fd)
+      offset = offset + #bytes
+      on_bytes(bytes)
+    end
+  end
+  read_new()
+  local event = vim.uv.new_fs_event()
+  event:start(path, {}, vim.schedule_wrap(read_new))
+  return {
+    stop = function()
+      if not event:is_closing() then
+        event:stop()
+        event:close()
+      end
+    end,
+  }
+end
+
 -- <C-b>x: tmux kill-pane -- shut down the target terminal's shell and close its
 -- window. The last window can't close, so it takes another tab as after <C-b>&.
 function M.kill_pane()
