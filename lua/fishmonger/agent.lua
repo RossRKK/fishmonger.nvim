@@ -58,6 +58,25 @@ M.states = {
   done = { icon = "\xef\x80\x8c", hl = "DiagnosticOk", label = "done" }, --
 }
 
+-- Claude Code's /color palette as it draws it, so a tab matches its session's prompt bar.
+M.colours = {
+  red = "#dc2626",
+  blue = "#6a9bcc",
+  green = "#16a34a",
+  yellow = "#ca8a04",
+  purple = "#827dbd",
+  cyan = "#0891b2",
+  pink = "#c46686",
+  orange = "#d97757",
+}
+
+--- The highlight group for a session colour, or nil for none or one not in M.colours.
+---@param colour string?
+---@return string?
+function M.colour_hl(colour)
+  return M.colours[colour] and ("FishmongerAgent" .. colour:gsub("^%l", string.upper)) or nil
+end
+
 local config = {
   -- Where the hook script writes its files. Keep in step with `agent-status`.
   dir = (vim.env.XDG_RUNTIME_DIR or "/tmp") .. "/claude-agents",
@@ -65,7 +84,8 @@ local config = {
 }
 
 -- session id -> record, as read from disk:
---   { session, state, detail, cwd, pids = {…}, agent_pid }
+--   { session, state, detail, cwd, pids = {…}, agent_pid, colour? }
+-- where `colour` comes from the <agent_pid>.colour claim the launcher wrote.
 local sessions = {}
 
 -- session id -> its background tasks in launch order, each
@@ -164,7 +184,7 @@ local function reload()
   if not handle then
     return
   end
-  local task_records = {}
+  local task_records, claims = {}, {}
   while true do
     local name = vim.uv.fs_scandir_next(handle)
     if not name then
@@ -189,6 +209,15 @@ local function reload()
       end
     elseif name:match("%.task$") then
       task_records[#task_records + 1] = read_json(path)
+    elseif name:match("^%d+%.colour$") then
+      claims[tonumber(name:match("^%d+"))] = read_json(path)
+    end
+  end
+  for _, record in pairs(sessions) do
+    local claim = claims[tonumber(record.agent_pid)]
+    -- A claim left by an earlier process on a reused pid doesn't count.
+    if claim and claim.pid_start == start_time(record.agent_pid) then
+      record.colour = claim.colour
     end
   end
   for _, record in ipairs(task_records) do

@@ -104,6 +104,43 @@ describe("agent status", function()
     end))
   end)
 
+  --- Write the launcher's colour claim for `pid`, started at `pid_start`.
+  local function write_claim(pid, colour, pid_start)
+    local f = assert(io.open(("%s/%d.colour"):format(dir, pid), "w"))
+    f:write(vim.json.encode({ colour = colour, pid_start = pid_start }))
+    f:close()
+  end
+
+  local function start_time(pid)
+    local stat = assert(io.open("/proc/" .. pid .. "/stat")):read("*a")
+    return tonumber(vim.split(stat:match(".*%) (.*)"), " ")[20])
+  end
+
+  it("takes a session's colour from the claim its agent process made", function()
+    local agent = fresh_agent()
+    write_session("s1", {})
+    write_claim(vim.fn.getpid(), "red", start_time(vim.fn.getpid()))
+    reload(agent)
+
+    assert.equals("red", agent.all()[1].colour)
+    assert.equals("FishmongerAgentRed", agent.colour_hl(agent.all()[1].colour))
+  end)
+
+  it("ignores a claim an earlier process left on the same pid", function()
+    local agent = fresh_agent()
+    write_session("s1", {})
+    write_claim(vim.fn.getpid(), "red", start_time(vim.fn.getpid()) - 1)
+    reload(agent)
+
+    assert.is_nil(agent.all()[1].colour)
+  end)
+
+  it("has no highlight for no colour or one it doesn't know", function()
+    local agent = fresh_agent()
+    assert.is_nil(agent.colour_hl(nil))
+    assert.is_nil(agent.colour_hl("mauve"))
+  end)
+
   it("gives every state a look, and unknown states a fallback", function()
     local agent = fresh_agent()
     assert.is_true(agent.look("permission").attention)
@@ -170,6 +207,22 @@ describe("agent view", function()
       local rows = view.items()
       assert.equals("reviewing the parser", rows[1].title)
       assert.is_nil(rows[2].title)
+    end)
+  end)
+
+  it("colours a row's title in its session's colour", function()
+    with_agents({
+      entry("proj", "busy", { title = "calm-otter", colour_hl = "FishmongerAgentRed" }),
+    }, function(view)
+      view.popup()
+      local line = vim.api.nvim_buf_get_lines(0, 0, 1, false)[1]
+      local marks = vim.api.nvim_buf_get_extmarks(0, -1, 0, -1, { details = true })
+      vim.api.nvim_win_close(0, true)
+      local coloured = vim.tbl_filter(function(m)
+        return m[4].hl_group == "FishmongerAgentRed"
+      end, marks)
+      assert.equals(1, #coloured)
+      assert.equals("calm-otter", line:sub(coloured[1][3] + 1, coloured[1][4].end_col))
     end)
   end)
 

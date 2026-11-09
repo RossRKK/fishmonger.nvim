@@ -468,7 +468,10 @@ local function term_agent(term)
   if not record then
     return nil
   end
-  return vim.tbl_extend("force", record, { look = agent.look(record.state) })
+  return vim.tbl_extend("force", record, {
+    look = agent.look(record.state),
+    colour_hl = agent.colour_hl(record.colour),
+  })
 end
 
 -- Claude Code's own title glyphs: ✳ when waiting for input, the rest frames of
@@ -554,8 +557,8 @@ end
 --- Every reporting agent across every tabpage, for the agent view (and anything
 --- else that wants a fleet-wide answer rather than a per-tabpage one).
 ---
---- Entries are `{ tab, slot, project, title, state, look, detail, cwd, session,
---- current }`. `title` is the terminal's own OSC title -- what the agent calls
+--- Entries are `{ tab, slot, project, title, state, look, colour_hl, detail,
+--- cwd, session, current }`. `title` is the terminal's own OSC title -- what the agent calls
 --- what it is doing, which is the only per-terminal identity there is once a
 --- workspace has several agents in it. `tab`/`slot` are nil for a session
 --- running somewhere fishmonger
@@ -580,6 +583,7 @@ function M.agents()
           title = strip_icon(term_title(e.term)),
           state = status.state,
           look = status.look,
+          colour_hl = status.colour_hl,
           detail = status.detail,
           cwd = status.cwd,
           session = status.session,
@@ -594,6 +598,7 @@ function M.agents()
         project = vim.fn.fnamemodify(record.cwd or "", ":t"),
         state = record.state,
         look = agent.look(record.state),
+        colour_hl = agent.colour_hl(record.colour),
         detail = record.detail,
         cwd = record.cwd,
         session = record.session,
@@ -1226,7 +1231,12 @@ function M.winbar()
     elseif icon then
       status = icon .. " "
     end
-    local lbl = (" %d:%s%s "):format(e.slot, status, tab_name(e.term))
+    local name = tab_name(e.term)
+    local colour_hl = (term_agent(e.term) or {}).colour_hl
+    if colour_hl then
+      name = ("%%#%s#%s%%#%s#"):format(icon_hl(colour_hl, base), name, base)
+    end
+    local lbl = (" %d:%s%s "):format(e.slot, status, name)
     tabs[#tabs + 1] = ("%%%d@v:lua.fishmonger_tab_click@%%#%s#%s%%X"):format(e.slot, base, lbl)
   end
   return table.concat(tabs) .. "%#TabLineFill#"
@@ -1236,6 +1246,9 @@ end
 local function default_highlights()
   vim.api.nvim_set_hl(0, "FishmongerTabSelNC", { link = "StatusLineNC", default = true })
   vim.api.nvim_set_hl(0, "FishmongerTabElsewhere", { link = "TabLineFill", default = true })
+  for colour, hex in pairs(agent.colours) do
+    vim.api.nvim_set_hl(0, agent.colour_hl(colour), { fg = hex, default = true })
+  end
 end
 
 _G.fishmonger_winbar = M.winbar

@@ -30,7 +30,7 @@ local fishmonger = require("fishmonger")
 local KEYS = "asdfghjkl;qwertyuiop"
 
 --- The rows, as data. Each is
----   { key, icon, hl, project, title, state, detail, entry, action }
+---   { key, icon, hl, colour_hl, project, title, state, detail, entry, action }
 --- where `action` focuses the agent (switch tabpage + show its terminal) and is
 --- absent for a session fishmonger doesn't manage and so cannot reach.
 ---@return table[]
@@ -42,6 +42,7 @@ function M.items()
       key = key ~= "" and key or nil,
       icon = entry.look and entry.look.icon or "\xe2\x80\xa2",
       hl = entry.look and entry.look.hl,
+      colour_hl = entry.colour_hl,
       project = entry.project,
       -- The terminal's own title, which is how the agent describes what it is
       -- doing -- and the only way to tell two agents in one project apart.
@@ -125,6 +126,12 @@ local function layout(rows)
     highlights[#highlights + 1] = { i - 1, 2, 3, "Special" }
     if row.hl then
       highlights[#highlights + 1] = { i - 1, 5, 5 + #row.icon, row.hl }
+    end
+    -- The title is the session's name, coloured as its prompt bar is.
+    if row.colour_hl and row.title and title_w > 0 then
+      local start = #("  " .. table.concat(cells, "  ", 1, 3) .. "  ")
+      highlights[#highlights + 1] =
+        { i - 1, start, start + #truncate(row.title, 28), row.colour_hl }
     end
   end
   return lines, highlights, width

@@ -531,6 +531,21 @@ describe("terminal windows", function()
     assert.truthy(strip(editor):find("%#FishmongerTabElsewhere# 1:", 1, true))
     assert.truthy(strip(side):find("%#FishmongerTabSelNC# 1:", 1, true))
   end)
+
+  it("colours a tab's name in its agent's session colour", function()
+    local agent = require("fishmonger.agent")
+    local real = agent.for_buf
+    agent.for_buf = function() ---@diagnostic disable-line: duplicate-set-field
+      return { session = "s1", state = "done", colour = "red" }
+    end
+    terms.setup({})
+    terms.show(1)
+    vim.g.statusline_winid = terms.win
+    local strip = terms.winbar()
+    agent.for_buf = real
+
+    assert.truthy(strip:find("%#FishmongerTabLineSelFishmongerAgentRed#", 1, true))
+  end)
 end)
 
 -- Panes (tmux split-window / kill-pane / select-pane): more terminal windows,
