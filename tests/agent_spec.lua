@@ -146,6 +146,9 @@ describe("agent status", function()
     assert.is_true(agent.look("permission").attention)
     assert.is_nil(agent.look("busy").attention)
     assert.is_nil(agent.look("done").attention)
+    -- A session with no turn yet neither spins nor asks for you.
+    assert.is_nil(agent.look("new").attention)
+    assert.is_nil(agent.look("new").frames)
     -- A newer hook script than this plugin: still renders, just generically.
     assert.is_not_nil(agent.look("something-new").icon)
     assert.is_nil(agent.look(nil))

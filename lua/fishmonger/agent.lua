@@ -56,6 +56,8 @@ M.states = {
   asked = { icon = "\xef\x81\x99", hl = "DiagnosticHint", label = "follow-up", attention = true }, --
   idle = { icon = "\xef\x89\x84", hl = "DiagnosticWarn", label = "waiting", attention = true }, --
   done = { icon = "\xef\x80\x8c", hl = "DiagnosticOk", label = "done" }, --
+  -- No turn yet since the session started or was cleared: nothing to see, nothing asked.
+  new = { icon = "\xef\x84\x8c", hl = "Comment", label = "new" }, --
 }
 
 -- Claude Code's /color palette as it draws it, so a tab matches its session's prompt bar.
