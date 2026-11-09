@@ -69,6 +69,20 @@ describe("terms.show", function()
     assert.equals(3, open_slot(terms))
   end)
 
+  it("starts a new terminal with the shell it is shown with, and only a new one", function()
+    local started = {}
+    vim.fn.jobstart = function(cmd, opts) ---@diagnostic disable-line: duplicate-set-field, unused-local
+      started[#started + 1] = cmd
+      return 1
+    end
+    terms.setup({ shell = "fish" })
+    terms.show(1, { shell = { "fish", "-C", "claude" } })
+    terms.show(1, { shell = "other" }) -- already running: nothing new starts
+    terms.show(2)
+
+    assert.same({ { "fish", "-C", "claude" }, "fish" }, started)
+  end)
+
   it("reuses the existing terminal when the slot is shown again", function()
     terms.show(1)
     local first = terms.slots[1]

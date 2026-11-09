@@ -209,8 +209,8 @@ end
 -- current window. Re-assert the filetype (jobstart can reset it). <C-k> moves
 -- up only to a pane above; with none, the program (Claude Code's kill-line)
 -- gets it. Returns the job's channel, which M.send writes to.
-local function start_job(buf)
-  local chan = vim.fn.jobstart(config.shell, { term = true })
+local function start_job(buf, shell)
+  local chan = vim.fn.jobstart(shell or config.shell, { term = true })
   vim.bo[buf].filetype = config.filetype
   vim.keymap.set("t", "<C-k>", function()
     if vim.fn.winnr("k") ~= vim.fn.winnr() then
@@ -688,7 +688,8 @@ local refresh_os_title
 -- Show the terminal in `slot` in `win`, creating it if the slot is empty; nil
 -- opens the side panel for it. A tab already on screen in another window trades
 -- places with what `win` shows: a terminal in two windows would have one pty
--- sized for both. `opts.insert` (default true) lands in terminal mode.
+-- sized for both. `opts.insert` (default true) lands in terminal mode;
+-- `opts.shell` starts a new terminal with that command instead of config.shell.
 local function show_in(win, slot, opts)
   opts = opts or {}
   slot = clamp(slot)
@@ -716,7 +717,7 @@ local function show_in(win, slot, opts)
 
   if not have_buf then
     -- buf is on screen now, so the pty sizes to this window
-    state.slots[slot] = { buf = buf, chan = start_job(buf) }
+    state.slots[slot] = { buf = buf, chan = start_job(buf, opts.shell) }
   end
 
   touch(state, state.slots[slot])
