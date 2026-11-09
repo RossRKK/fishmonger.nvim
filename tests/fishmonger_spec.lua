@@ -546,7 +546,7 @@ describe("terminal windows", function()
     assert.truthy(strip(side):find("%#FishmongerTabSelNC# 1:", 1, true))
   end)
 
-  it("colours a tab's name in its agent's session colour", function()
+  it("leaves a tab's name in the tab's colour, not its agent's session colour", function()
     local agent = require("fishmonger.agent")
     local real = agent.for_buf
     agent.for_buf = function() ---@diagnostic disable-line: duplicate-set-field
@@ -558,7 +558,7 @@ describe("terminal windows", function()
     local strip = terms.winbar()
     agent.for_buf = real
 
-    assert.truthy(strip:find("%#FishmongerTabLineSelFishmongerAgentRed#", 1, true))
+    assert.falsy(strip:find("FishmongerAgentRed", 1, true))
   end)
 end)
 

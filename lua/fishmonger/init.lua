@@ -1232,12 +1232,7 @@ function M.winbar()
     elseif icon then
       status = icon .. " "
     end
-    local name = tab_name(e.term)
-    local colour_hl = (term_agent(e.term) or {}).colour_hl
-    if colour_hl then
-      name = ("%%#%s#%s%%#%s#"):format(icon_hl(colour_hl, base), name, base)
-    end
-    local lbl = (" %d:%s%s "):format(e.slot, status, name)
+    local lbl = (" %d:%s%s "):format(e.slot, status, tab_name(e.term))
     tabs[#tabs + 1] = ("%%%d@v:lua.fishmonger_tab_click@%%#%s#%s%%X"):format(e.slot, base, lbl)
   end
   return table.concat(tabs) .. "%#TabLineFill#"
