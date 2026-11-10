@@ -562,6 +562,99 @@ describe("terminal windows", function()
   end)
 end)
 
+-- Maximise: the side terminal takes over the main window, the panel closes;
+-- unlike zoom it is a real layout change, so other windows (a file tree) stay.
+describe("terms.maximise", function()
+  local terms, editor, file
+
+  local function slot_in(win)
+    local buf = vim.api.nvim_win_get_buf(win)
+    for slot, term in pairs(terms.slots) do
+      if term.buf == buf then
+        return slot
+      end
+    end
+  end
+
+  before_each(function()
+    terms = fresh_terms()
+    vim.o.columns = 200
+    editor = vim.api.nvim_get_current_win()
+    file = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(file, "fishmonger-spec-file-" .. file)
+    vim.api.nvim_win_set_buf(editor, file)
+  end)
+
+  it("moves the side panel's tab into the main window and closes the panel", function()
+    terms.show(1)
+    terms.show(2)
+    terms.maximise()
+
+    assert.is_nil(terms.win)
+    assert.equals(2, slot_in(editor))
+    assert.equals(editor, vim.api.nvim_get_current_win())
+  end)
+
+  it("picks the widest window as the main one, not a narrow tree beside it", function()
+    vim.cmd("topleft 20vsplit")
+    local tree = vim.api.nvim_get_current_win()
+    terms.show(1)
+    terms.maximise()
+
+    assert.equals(1, slot_in(editor))
+    assert.is_nil(slot_in(tree))
+  end)
+
+  it("works from the editor too, taking the panel's tab", function()
+    terms.show(1)
+    vim.api.nvim_set_current_win(editor)
+    terms.maximise()
+
+    assert.equals(1, slot_in(editor))
+    assert.is_nil(terms.win)
+  end)
+
+  it("closes panes split from the panel, keeping their shells", function()
+    terms.show(1)
+    terms.split("below")
+    terms.maximise()
+
+    assert.is_nil(terms.win)
+    assert.same({ 1, 2 }, slots_of(terms))
+    assert.same({ editor }, vim.api.nvim_tabpage_list_wins(0))
+  end)
+
+  it("docks back on a second press: the panel returns, the file comes back", function()
+    terms.show(1)
+    terms.maximise()
+    assert.equals(1, slot_in(editor))
+    terms.maximise()
+
+    assert.equals(1, open_slot(terms))
+    assert.equals(file, vim.api.nvim_win_get_buf(editor))
+    assert.equals(terms.win, vim.api.nvim_get_current_win())
+  end)
+
+  it("docks into a panel reopened meanwhile, rather than swapping it out", function()
+    terms.show(1)
+    terms.maximise() -- editor shows 1
+    vim.api.nvim_set_current_win(editor)
+    terms.toggle() -- panel back, showing 2
+    vim.api.nvim_set_current_win(editor)
+    terms.maximise()
+
+    assert.equals(1, open_slot(terms))
+    assert.equals(file, vim.api.nvim_win_get_buf(editor))
+  end)
+
+  it("opens a terminal in the main window when there is no panel", function()
+    terms.maximise()
+
+    assert.equals(1, slot_in(editor))
+    assert.is_nil(terms.win)
+  end)
+end)
+
 -- Panes (tmux split-window / kill-pane / select-pane): more terminal windows,
 -- each showing one of the tabpage's shared tabs.
 describe("panes", function()

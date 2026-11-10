@@ -69,6 +69,7 @@ agent that writes the same shape works.
 | `kill_pane()`                  | `<C-b>x`: tmux kill-pane. Shut down the target terminal's shell and close its window (`<C-b>&` keeps the window, showing another tab). |
 | `select(direction)`            | `<C-b>` arrow: tmux select-pane. `wincmd h/j/k/l`, for when the terminal program keeps the ctrl keys. |
 | `zoom()`                       | `<C-b>z`: tmux zoom. The side terminal fills the screen and keeps its tab strip, and tab keys still switch inside it. Press again, or enter another split, to dock it. |
+| `maximise()`                   | `<C-b>Z`: the side terminal moves into the main window (the widest one outside the panel) and the panel closes: a real layout change, so a file tree beside it stays usable. From a terminal in the editor area it docks back into the panel and the window returns to its file. |
 | `tabs(tab?)`                   | A tabpage's terminals as `{ slot, title, icon, hl, agent }`. `icon` is the status glyph: the agent's reported state, else the OSC title's leading glyph. |
 | `agents()`                     | Every reporting agent across every tabpage, blocked ones first. |
 | `focus(entry)`                 | Switch to an `agents()` entry's tabpage and surface its terminal. |

@@ -1025,6 +1025,46 @@ function M.zoom()
   vim.api.nvim_set_current_win(win)
 end
 
+-- The tabpage's editor area: its widest docked window outside the side panel,
+-- so a file tree beside it is passed over.
+local function main_window(tab)
+  local best
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if not vim.w[win][SIDE] and vim.api.nvim_win_get_config(win).relative == "" then
+      if not best or vim.api.nvim_win_get_width(win) > vim.api.nvim_win_get_width(best) then
+        best = win
+      end
+    end
+  end
+  return best
+end
+
+-- <C-b>Z: the side terminal takes the main window and the panel closes -- a
+-- real layout change, unlike zoom, so the rest of the tabpage stays usable.
+-- From a terminal in the editor area it docks back, the window returning to
+-- its file the way <C-b>t's does when its terminal goes.
+function M.maximise()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local state = st(tab)
+  local cur = vim.api.nvim_get_current_win()
+  local cur_slot = slot_of_buf(vim.api.nvim_win_get_buf(cur), state)
+  if cur_slot and not vim.w[cur][SIDE] then
+    fall_back(cur, state)
+    show_in(side_of(tab), cur_slot)
+    return
+  end
+  local main = main_window(tab)
+  local from = vim.w[cur][SIDE] and cur or side_of(tab)
+  local slot = from and slot_of_buf(vim.api.nvim_win_get_buf(from), state) or hidden_slot(state, tab)
+  if not (main and slot) then
+    return
+  end
+  for _, win in ipairs(side_windows(tab)) do
+    pcall(vim.api.nvim_win_close, win, false)
+  end
+  show_in(main, slot)
+end
+
 -- <C-b>&: kill the current side terminal (tmux kill-window). Unlike <C-t>, which
 -- only hides the window, this shuts the shell down. If the killed terminal is the
 -- one on screen we bring another tab into the viewport BEFORE deleting its buffer
@@ -1456,6 +1496,8 @@ function M.setup_keymaps()
       require("fishmonger.view").popup()
     elseif key == "z" then
       M.zoom()
+    elseif key == "Z" then
+      M.maximise()
     elseif key == '"' then
       M.split("below")
     elseif key == "%" then
@@ -1491,7 +1533,7 @@ function M.setup_keymaps()
     "<C-b>",
     tab_prefix,
     {
-      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / & kill / . move / mN to workspace / a agents)',
+      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / Z maximise / & kill / . move / mN to workspace / a agents)',
     }
   )
 end
