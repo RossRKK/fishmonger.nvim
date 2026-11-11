@@ -153,6 +153,15 @@ describe("agent status", function()
     assert.is_not_nil(agent.look("something-new").icon)
     assert.is_nil(agent.look(nil))
   end)
+
+  it("gives a wide glyph and a narrow one slots of equal display width", function()
+    local agent = fresh_agent()
+    assert.equals("⏳", agent.glyph_cell("⏳"))
+    assert.equals("✓ ", agent.glyph_cell("✓"))
+    for state in pairs(agent.states) do
+      assert.equals(2, vim.fn.strdisplaywidth(agent.glyph_cell(agent.look(state).icon)), state)
+    end
+  end)
 end)
 
 describe("agent view", function()
@@ -226,6 +235,24 @@ describe("agent view", function()
       end, marks)
       assert.equals(1, #coloured)
       assert.equals("calm-otter", line:sub(coloured[1][3] + 1, coloured[1][4].end_col))
+    end)
+  end)
+
+  it("lines columns up after a wide glyph, and sizes the popup by display width", function()
+    local wide = { icon = "⏳", hl = "Comment", label = "working" }
+    with_agents({
+      entry("proj", "done", { look = wide, detail = "a longer detail than the other row's" }),
+      entry("proj", "done"),
+    }, function(view)
+      view.popup()
+      local lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+      local width = vim.api.nvim_win_get_width(0)
+      vim.api.nvim_win_close(0, true)
+      local function project_col(line)
+        return vim.fn.strdisplaywidth(line:sub(1, line:find("proj", 1, true) - 1))
+      end
+      assert.equals(project_col(lines[2]), project_col(lines[1]))
+      assert.equals(vim.fn.strdisplaywidth(lines[1]) + 2, width)
     end)
   end)
 

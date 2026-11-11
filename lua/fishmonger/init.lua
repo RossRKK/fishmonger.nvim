@@ -1276,9 +1276,9 @@ function M.winbar()
     local icon, hl = status_icon(e.term, term_title(e.term))
     local status = ""
     if icon and hl then
-      status = ("%%#%s#%s%%#%s# "):format(icon_hl(hl, base), icon, base)
+      status = ("%%#%s#%s%%#%s#"):format(icon_hl(hl, base), agent.glyph_cell(icon), base)
     elseif icon then
-      status = icon .. " "
+      status = agent.glyph_cell(icon)
     end
     local lbl = (" %d:%s%s "):format(e.slot, status, tab_name(e.term))
     tabs[#tabs + 1] = ("%%%d@v:lua.fishmonger_tab_click@%%#%s#%s%%X"):format(e.slot, base, lbl)

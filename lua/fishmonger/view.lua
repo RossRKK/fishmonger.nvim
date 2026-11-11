@@ -22,6 +22,7 @@
 local M = {}
 
 local fishmonger = require("fishmonger")
+local agent = require("fishmonger.agent")
 
 -- Keys handed out to rows, in order. Home row first: the list is meant to be
 -- used without looking at it. Digits are deliberately absent -- <C-b>N already
@@ -112,7 +113,7 @@ local function layout(rows)
   for i, row in ipairs(rows) do
     local cells = {
       row.key or " ",
-      row.icon,
+      agent.glyph_cell(row.icon),
       pad(row.project or "?", project_w),
     }
     if title_w > 0 then
@@ -121,7 +122,7 @@ local function layout(rows)
     cells[#cells + 1] = truncate(row.detail or row.state or "", 60)
     local line = ("  " .. table.concat(cells, "  ")):gsub("%s+$", "")
     lines[#lines + 1] = line
-    width = math.max(width, vim.fn.strchars(line) + 2)
+    width = math.max(width, vim.fn.strdisplaywidth(line) + 2)
     -- Colour the glyph by state, and the key by "this is what you press".
     highlights[#highlights + 1] = { i - 1, 2, 3, "Special" }
     if row.hl then

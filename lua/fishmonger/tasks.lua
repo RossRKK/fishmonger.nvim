@@ -217,8 +217,8 @@ function row(task)
     or summary.last_line
     or ""
   local text = string.format(
-    "%s %s · %s",
-    look.icon,
+    "%s%s · %s",
+    agent.glyph_cell(look.icon),
     what,
     elapsed((task.finished or env.now()) - task.started)
   )

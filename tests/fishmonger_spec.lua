@@ -575,6 +575,30 @@ describe("terminal windows", function()
 
     assert.falsy(strip:find("FishmongerAgentRed", 1, true))
   end)
+
+  it("draws a tab with a wide status glyph as wide as one with a narrow glyph", function()
+    local agent = require("fishmonger.agent")
+    local real_for_buf, done = agent.for_buf, agent.states.done
+    local real_icon = done.icon
+    agent.for_buf = function() ---@diagnostic disable-line: duplicate-set-field
+      return { session = "s1", state = "done" }
+    end
+    terms.setup({})
+    terms.show(1)
+    vim.g.statusline_winid = terms.win
+    --- The strip as it shows on screen: statusline %-items removed.
+    local function shown()
+      return (terms.winbar():gsub("%%%d+@[^@]*@", ""):gsub("%%#[^#]*#", ""):gsub("%%X", ""))
+    end
+    local narrow = shown()
+    done.icon = "⏳"
+    local ok, wide = pcall(shown)
+    agent.for_buf, done.icon = real_for_buf, real_icon
+    assert(ok, wide)
+
+    assert.truthy(wide:find("⏳", 1, true))
+    assert.equals(vim.fn.strdisplaywidth(narrow), vim.fn.strdisplaywidth(wide))
+  end)
 end)
 
 -- Maximise: the side terminal takes over the main window, the panel closes;

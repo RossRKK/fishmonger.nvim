@@ -27,9 +27,8 @@ local coalesce = require("fishmonger.coalesce")
 -- are the states that mean the agent has stopped and cannot continue without
 -- you, and they are what a background workspace needs to be able to shout.
 --
--- The glyphs are single-width so a row of them in a tab label costs one column
--- each, and they stay distinguishable at a glance: a filled mark for "wants
--- you", a spinner for "working", a tick for "finished". NOT ✳ for working: that
+-- The glyphs stay distinguishable at a glance: a filled mark for "wants you", a
+-- spinner for "working", a tick for "finished". NOT ✳ for working: that
 -- is the glyph Claude Code itself puts in its title when it has FINISHED, so the
 -- title-icon fallback (init.lua) shows it meaning "done" -- reusing it here for
 -- the opposite state made the two paths contradict each other.
@@ -61,6 +60,17 @@ M.states = {
   -- No turn yet since the session started or was cleared: nothing to see, nothing asked.
   new = { icon = "\xef\x84\x8c", hl = "Comment", label = "new" }, --
 }
+
+-- Glyphs are one or two cells wide (an emoji is two), so each is drawn in a
+-- fixed slot: whatever follows it starts in the same column whichever shows.
+local GLYPH_CELLS = 2
+
+--- `icon` padded with spaces to its slot's display width.
+---@param icon string
+---@return string
+function M.glyph_cell(icon)
+  return icon .. (" "):rep(math.max(0, GLYPH_CELLS - vim.fn.strdisplaywidth(icon)))
+end
 
 -- Claude Code's /color palette as it draws it, so a tab matches its session's prompt bar.
 M.colours = {

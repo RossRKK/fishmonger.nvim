@@ -101,6 +101,23 @@ describe("task list", function()
     assert.truthy(line:find("1m12s", 1, true))
   end)
 
+  it("starts every row's text in the same column, whatever its glyph's width", function()
+    local done = require("fishmonger.agent").states.done
+    local real = done.icon
+    done.icon = "⏳"
+    local term_win = fixture({ s1 = { task(), task({ id = "b2", finished = NOW }) } })
+    local ok, err = pcall(tasks_ui.sync)
+    done.icon = real
+    assert(ok, err)
+
+    local shown = lines(list_under(term_win))
+    local function text_col(line)
+      return vim.fn.strdisplaywidth(line:sub(1, line:find("Run the tests", 1, true) - 1))
+    end
+    assert.truthy(shown[2]:find("⏳", 1, true))
+    assert.equals(text_col(shown[1]), text_col(shown[2]))
+  end)
+
   it("falls back to the command for a task without a description", function()
     local term_win = fixture({ s1 = { task({ description = vim.NIL }) } })
 
