@@ -101,6 +101,18 @@ describe("task list", function()
     assert.truthy(line:find("1m12s", 1, true))
   end)
 
+  it("moves a running task's time on at the next sync", function()
+    local term_win = fixture({ s1 = { task() } })
+    tasks_ui.sync()
+
+    NOW = NOW + 1
+    local ok, err = pcall(tasks_ui.sync)
+    NOW = NOW - 1
+    assert(ok, err)
+
+    assert.truthy(lines(list_under(term_win))[1]:find("1m13s", 1, true))
+  end)
+
   it("starts every row's text in the same column, whatever its glyph's width", function()
     local done = require("fishmonger.agent").states.done
     local real = done.icon

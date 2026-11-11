@@ -1,8 +1,8 @@
 -- vim.schedule_wrap for libuv callbacks that fire on their own (timers, fs
 -- watchers). libuv keeps firing while the main loop is blocked, at a hit-enter
--- prompt say, and schedule_wrap queues one call per fire: a 150ms timer piles up
--- a backlog, and if the callback errors, each Enter runs the next queued call
--- into the next prompt. This queues at most one call; fires while one is
+-- prompt say, and schedule_wrap queues one call per fire: a repeating timer
+-- piles up a backlog, and if the callback errors, each Enter runs the next
+-- queued call into the next prompt. This queues at most one call; fires while one is
 -- pending fold into it. The callback gets no arguments, since the fires it
 -- stands for each had their own.
 

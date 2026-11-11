@@ -231,7 +231,7 @@ function first_line(text)
   return first and first .. (vim.trim(rest) ~= "" and " …" or "") or text
 end
 
---- How a task's icon looks: the working spinner while it runs, then done or
+--- How a task's icon looks: the working glyph while it runs, then done or
 --- failed by what its output reported (no exit code reaches us).
 function status_look(task, summary)
   if not task.finished then

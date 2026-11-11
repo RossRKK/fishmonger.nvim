@@ -27,8 +27,8 @@ local coalesce = require("fishmonger.coalesce")
 -- are the states that mean the agent has stopped and cannot continue without
 -- you, and they are what a background workspace needs to be able to shout.
 --
--- The glyphs stay distinguishable at a glance: a filled mark for "wants you", a
--- spinner for "working", a tick for "finished". NOT ✳ for working: that
+-- The glyphs stay distinguishable at a glance: a filled mark for "wants you",
+-- an hourglass for "working", a tick for "finished". NOT ✳ for working: that
 -- is the glyph Claude Code itself puts in its title when it has FINISHED, so the
 -- title-icon fallback (init.lua) shows it meaning "done" -- reusing it here for
 -- the opposite state made the two paths contradict each other.
@@ -37,15 +37,8 @@ local coalesce = require("fishmonger.coalesce")
 -- asks nothing of you, so it should recede and leave colour to the states that
 -- shout.
 M.states = {
-  -- Working animates: `frames` is cycled by the spinner timer below while any
-  -- agent is in a spinning state; `icon` is the resting frame for consumers
-  -- that read the table directly.
-  busy = {
-    icon = "\xe2\xa0\x8b",
-    frames = { "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏" },
-    hl = "Comment",
-    label = "working",
-  }, --
+  -- Static, not a spinner: animating repaints every label showing it several times a second.
+  busy = { icon = "⏳", hl = "Comment", label = "working" }, --
   permission = {
     icon = "\xef\x8a\x9c",
     hl = "DiagnosticWarn",
@@ -109,7 +102,7 @@ local sessions = {}
 -- task's end, so whether it is still running is read off /proc.
 local tasks = {}
 
--- The running tasks' { pid, pid_start }, which the spinner tick re-checks.
+-- The running tasks' { pid, pid_start }, which the poll re-checks.
 local running = {}
 
 -- The on_change callback given to setup(), kept here so refresh() can repaint
@@ -285,32 +278,39 @@ function M.for_buf(buf, resolve)
   end
 end
 
--- The busy spinner: a timer that advances the frame and asks for a repaint, run
--- ONLY while some agent is in a spinning state -- most of the time there is no
--- agent at all, or every agent is blocked or done, and then it costs nothing.
--- `on_tick` is the repaint (wired in setup); it is deliberately not the full
--- on_change pipeline, so a frame advance repaints the strips that draw the icon
--- without re-announcing the fleet to everything else.
-local spin = { timer = nil, frame = 1, on_tick = function() end }
+-- The poll: what changes without any file being written. A working agent killed
+-- mid-turn writes nothing more (no SessionEnd hook), and a background task
+-- finishing writes nothing at all, so while either could happen /proc is
+-- re-checked on a timer. Otherwise every change arrives as a file write, and no
+-- timer runs.
+local POLL_MS = 1000
+local poll = { timer = nil, on_task_progress = function() end }
 
-local function spinning_somewhere()
+--- Is `state` working? Unknown states take the working look (see M.look), so they count.
+---@param state string?
+---@return boolean
+local function working(state)
+  local look = M.states[state]
+  return look == nil or look == M.states.busy
+end
+
+--- Could the statuses change without a file being written?
+---@return boolean
+local function may_change_silently()
   if #running > 0 then
     return true
   end
   for _, record in pairs(sessions) do
-    -- Unknown states take the busy look (see M.look), so they spin too.
-    local look = M.states[record.state]
-    if not look or look.frames then
+    if working(record.state) then
       return true
     end
   end
   return false
 end
 
---- Advance the spinner a frame. An agent killed mid-turn never writes another
---- file, so without the liveness check its "busy" would spin forever; a task
---- finishing writes none either.
-local function tick()
+--- One poll: reload if an agent died or a task finished, else tell the task list
+--- its running tasks' elapsed time and output have moved on.
+local function check()
   for _, record in pairs(sessions) do
     if not alive(record) then
       M.refresh()
@@ -323,40 +323,36 @@ local function tick()
       return
     end
   end
-  spin.frame = spin.frame % #M.states.busy.frames + 1
-  spin.on_tick()
+  if #running > 0 then
+    poll.on_task_progress()
+  end
 end
-M._tick, M._spin = tick, spin -- exposed for tests only
+M._check, M._poll = check, poll -- exposed for tests only
 
---- Start or stop the spinner to match the sessions. Called after every reload:
---- the set of busy agents only changes when the session files do.
-local function sync_spinner()
-  local want = spinning_somewhere()
-  if want and not spin.timer then
-    spin.timer = vim.uv.new_timer()
-    spin.timer:start(0, 150, coalesce(tick))
-  elseif not want and spin.timer then
-    spin.timer:stop()
-    spin.timer:close()
-    spin.timer = nil
+--- Start or stop the poll to match the statuses. Called after every reload:
+--- what could change silently only changes when the files do.
+local function sync_poll()
+  local want = may_change_silently()
+  if want and not poll.timer then
+    poll.timer = vim.uv.new_timer()
+    poll.timer:start(POLL_MS, POLL_MS, coalesce(check))
+  elseif not want and poll.timer then
+    poll.timer:stop()
+    poll.timer:close()
+    poll.timer = nil
   end
 end
 
 --- How a state displays: `{ icon, hl, label, attention }`. Unknown states (a
 --- newer hook script than this plugin) fall back to the working look rather than
---- disappearing. A state with `frames` answers with the spinner's current one.
+--- disappearing.
 ---@param state string?
 ---@return table?
 function M.look(state)
   if not state then
     return nil
   end
-  local look = M.states[state]
-    or { frames = M.states.busy.frames, hl = M.states.busy.hl, label = state }
-  if look.frames then
-    look = vim.tbl_extend("force", {}, look, { icon = look.frames[spin.frame] })
-  end
-  return look
+  return M.states[state] or { icon = M.states.busy.icon, hl = M.states.busy.hl, label = state }
 end
 
 --- Re-read the status directory right now, synchronously, and repaint. The
@@ -366,7 +362,7 @@ end
 --- show stale state.
 function M.refresh()
   reload()
-  sync_spinner()
+  sync_poll()
   notify()
 end
 
@@ -399,19 +395,18 @@ end
 --- (the first hook creates it, and the poll below picks it up).
 ---@param opts? table see `config`
 ---@param on_change fun() called, debounced, whenever the statuses change
----@param on_tick? fun() called on each spinner frame; a lighter repaint than
----   on_change (nothing about the fleet changed, only the working icon's frame).
----   Defaults to on_change.
-function M.setup(opts, on_change, on_tick)
+---@param on_task_progress? fun() called each poll while a task runs and nothing
+---   else changed: only its elapsed time and output have moved on.
+function M.setup(opts, on_change, on_task_progress)
   config = vim.tbl_extend("force", config, opts or {})
   notify = on_change
-  spin.on_tick = on_tick or on_change
+  poll.on_task_progress = on_task_progress or function() end
   if not config.enabled then
     return
   end
   vim.fn.mkdir(config.dir, "p")
   reload()
-  sync_spinner()
+  sync_poll()
 
   local timer
   local function refresh()
@@ -423,7 +418,7 @@ function M.setup(opts, on_change, on_tick)
     -- event, several agents at once); coalesce them into one repaint.
     timer = vim.defer_fn(function()
       reload()
-      sync_spinner()
+      sync_poll()
       on_change()
     end, 50)
   end

@@ -1334,19 +1334,8 @@ function M.setup(opts)
       end
     end
   end, function()
-    -- A spinner frame advance is not a state change: repaint the strips that
-    -- draw the icon (the winbar, and the tab labels via FishmongerTabsChanged)
-    -- without announcing FishmongerAgentsChanged -- consumers that re-render a
-    -- whole view on that would fight the cursor several times a second for a
-    -- frame nobody is blocked on. Consumers that can repaint cheaply (or know
-    -- when it's safe) get their own event instead.
-    pcall(vim.cmd, "redrawstatus")
-    vim.api.nvim_exec_autocmds("User", { pattern = "FishmongerAgentsTick" })
-    for tab in pairs(states) do
-      if vim.api.nvim_tabpage_is_valid(tab) then
-        emit_tabs_changed(tab)
-      end
-    end
+    -- Only the task list shows a running task's time and output; nothing else changed.
+    require("fishmonger.tasks").sync()
   end)
   -- Yanks of Claude's replies come back unwrapped (fishmonger/yank.lua).
   require("fishmonger.yank").setup(config.filetype, function(buf)

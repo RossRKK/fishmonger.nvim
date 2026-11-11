@@ -1328,3 +1328,38 @@ describe("terms.open_output", function()
     assert.equals(windows, #vim.api.nvim_tabpage_list_wins(0))
   end)
 end)
+
+describe("agent poll wiring", function()
+  it("repaints only the task list when a poll finds a task still running", function()
+    local agent = require("fishmonger.agent")
+    local real_setup = agent.setup
+    local on_task_progress
+    agent.setup = function(_, _, progress) ---@diagnostic disable-line: duplicate-set-field
+      on_task_progress = progress
+    end
+    local terms = fresh_terms()
+    local ok, err = pcall(terms.setup, {})
+    agent.setup = real_setup
+    assert(ok, err)
+    terms.show(1)
+
+    local tasks = require("fishmonger.tasks")
+    local real_sync, synced, events = tasks.sync, 0, {}
+    tasks.sync = function() ---@diagnostic disable-line: duplicate-set-field
+      synced = synced + 1
+    end
+    local listener = vim.api.nvim_create_autocmd("User", {
+      pattern = "Fishmonger*",
+      callback = function(args)
+        events[#events + 1] = args.match
+      end,
+    })
+    ok, err = pcall(on_task_progress)
+    tasks.sync = real_sync
+    vim.api.nvim_del_autocmd(listener)
+    assert(ok, err)
+
+    assert.equals(1, synced)
+    assert.same({}, events)
+  end)
+end)

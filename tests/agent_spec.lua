@@ -68,20 +68,20 @@ describe("agent status", function()
     assert.equals(0, vim.fn.filereadable(dir .. "/dead.json"))
   end)
 
-  it("stops spinning for a busy agent that dies without writing again", function()
+  it("stops polling for a busy agent that dies without writing again", function()
     local agent = fresh_agent()
     local proc = vim.system({ "sleep", "60" })
     write_session("killed", { state = "busy", agent_pid = proc.pid })
     reload(agent)
     assert.equals(1, #agent.all())
-    assert.is_not_nil(agent._spin.timer)
+    assert.is_not_nil(agent._poll.timer)
 
     proc:kill(9)
     proc:wait()
-    agent._tick()
+    agent._check()
 
     assert.equals(0, #agent.all())
-    assert.is_nil(agent._spin.timer)
+    assert.is_nil(agent._poll.timer)
     assert.equals(0, vim.fn.filereadable(dir .. "/killed.json"))
   end)
 
@@ -146,12 +146,35 @@ describe("agent status", function()
     assert.is_true(agent.look("permission").attention)
     assert.is_nil(agent.look("busy").attention)
     assert.is_nil(agent.look("done").attention)
-    -- A session with no turn yet neither spins nor asks for you.
+    -- A session with no turn yet neither works nor asks for you.
     assert.is_nil(agent.look("new").attention)
-    assert.is_nil(agent.look("new").frames)
-    -- A newer hook script than this plugin: still renders, just generically.
-    assert.is_not_nil(agent.look("something-new").icon)
+    assert.are_not.equals(agent.look("busy").icon, agent.look("new").icon)
+    -- A newer hook script than this plugin: still renders, as working.
+    assert.equals("⏳", agent.look("busy").icon)
+    assert.equals("⏳", agent.look("something-new").icon)
+    assert.equals("something-new", agent.look("something-new").label)
     assert.is_nil(agent.look(nil))
+  end)
+
+  it("polls only while an agent is working, a state it doesn't know included", function()
+    local agent = fresh_agent()
+    write_session("s1", { state = "busy" })
+    reload(agent)
+    assert.is_not_nil(agent._poll.timer)
+
+    write_session("s1", { state = "done" })
+    reload(agent)
+    assert.is_nil(agent._poll.timer)
+
+    for _, state in ipairs({ "permission", "idle", "new" }) do
+      write_session("s1", { state = state })
+      reload(agent)
+      assert.is_nil(agent._poll.timer, state)
+    end
+
+    write_session("s1", { state = "something-new" })
+    reload(agent)
+    assert.is_not_nil(agent._poll.timer)
   end)
 
   it("gives a wide glyph and a narrow one slots of equal display width", function()
@@ -383,15 +406,15 @@ describe("agent background tasks", function()
     agent.setup({ dir = dir }, function()
       changes = changes + 1
     end)
-    assert.is_not_nil(agent._spin.timer)
+    assert.is_not_nil(agent._poll.timer)
 
     proc:kill(9)
     proc:wait()
-    agent._tick()
+    agent._check()
 
     assert.is_number(agent.tasks("s1")[1].finished)
     assert.equals(1, changes)
-    assert.is_nil(agent._spin.timer)
+    assert.is_nil(agent._poll.timer)
   end)
 
   it("forgets a dismissed task", function()
@@ -416,18 +439,41 @@ describe("agent background tasks", function()
   end)
 end)
 
-describe("agent spinner", function()
-  it("queues one tick, not one per fire, while the main loop is blocked", function()
+describe("agent poll", function()
+  it("reports a running task's progress each poll, without announcing a change", function()
+    local agent = fresh_agent()
+    write_session("s1", { state = "done" })
+    local proc, live = running_task()
+    write_task("s1", "b1", live)
+    local changes, progress = 0, 0
+    agent.setup({ dir = dir }, function()
+      changes = changes + 1
+    end, function()
+      progress = progress + 1
+    end)
+
+    agent._check()
+    agent._check()
+    proc:kill(9)
+    proc:wait()
+
+    assert.equals(2, progress)
+    assert.equals(0, changes)
+  end)
+
+  it("queues one poll, not one per fire, while the main loop is blocked", function()
     -- The timer and scheduler are faked so the spec fires the timer by hand and
     -- drains the queue when it chooses, as a hit-enter prompt would leave it.
     local agent = fresh_agent()
     write_session("s1", { state = "busy" })
-    local fire, queue = nil, {}
+    local proc, live = running_task()
+    write_task("s1", "b1", live)
+    local fire, interval, queue = nil, nil, {}
     local real_timer, real_schedule = vim.uv.new_timer, vim.schedule
     vim.uv.new_timer = function() ---@diagnostic disable-line: duplicate-set-field
       return {
-        start = function(_, _, _, cb)
-          fire = cb
+        start = function(_, _, every, cb)
+          fire, interval = cb, every
         end,
         stop = function() end,
         close = function() end,
@@ -436,10 +482,10 @@ describe("agent spinner", function()
     vim.schedule = function(cb) ---@diagnostic disable-line: duplicate-set-field
       queue[#queue + 1] = cb
     end
-    local ticks = 0
+    local polls = 0
     local ok, err = pcall(function()
       agent.setup({ dir = dir }, function() end, function()
-        ticks = ticks + 1
+        polls = polls + 1
         error("repaint failed")
       end)
       for _ = 1, 10 do
@@ -449,11 +495,14 @@ describe("agent spinner", function()
     vim.uv.new_timer, vim.schedule = real_timer, real_schedule
     assert(ok, err)
 
+    assert.equals(1000, interval)
     assert.equals(1, #queue)
     assert.has_error(table.remove(queue))
-    assert.equals(1, ticks)
-    -- The erroring tick didn't wedge the spinner: the next fire queues again.
+    assert.equals(1, polls)
+    -- The erroring poll didn't wedge the timer: the next fire queues again.
     fire()
     assert.equals(1, #queue)
+    proc:kill(9)
+    proc:wait()
   end)
 end)
