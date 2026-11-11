@@ -109,6 +109,18 @@ describe("task list", function()
     assert.truthy(lines(list_under(term_win))[1]:find("cargo test", 1, true))
   end)
 
+  it("shows a multi-line command (a heredoc) as its first line, marked as cut", function()
+    local term_win = fixture({
+      s1 = { task({ description = "", command = "cat > run.sh <<'EOF'\necho hi\nEOF" }) },
+    })
+
+    tasks_ui.sync()
+
+    local shown = lines(list_under(term_win))
+    assert.equals(1, #shown)
+    assert.truthy(shown[1]:find("cat > run.sh <<'EOF' …", 1, true))
+  end)
+
   it("keeps the same list window from one sync to the next", function()
     local term_win = fixture({ s1 = { task() } })
     tasks_ui.sync()

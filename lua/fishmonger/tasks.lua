@@ -21,7 +21,7 @@ local LIST_OF = "fishmonger_tasks_of"
 local ns = vim.api.nvim_create_namespace("fishmonger_tasks")
 
 -- Defined below, in top-down order.
-local COUNTS, last_count, lists_by_terminal, open_list, task_under_cursor, render, row, status_look, elapsed, tail
+local COUNTS, last_count, lists_by_terminal, open_list, task_under_cursor, render, row, first_line, status_look, elapsed, tail
 
 -- Set by setup(): where the list's inputs come from.
 ---@type { terminal_windows: fun(tab: integer): integer[], session_of: fun(buf: integer): string?, tasks_of: fun(session: string): table[], open_output: fun(path: string, below: integer), now: fun(): number, side_var: string? }
@@ -209,8 +209,10 @@ end
 function row(task)
   local summary = M.summarize(tail(task.output))
   local look = status_look(task, summary)
-  local what = type(task.description) == "string" and task.description ~= "" and task.description
-    or task.command
+  local what = first_line(
+    type(task.description) == "string" and task.description ~= "" and task.description
+      or task.command
+  )
   local how = summary.passed and string.format("%d✓ %d✗", summary.passed, summary.failed or 0)
     or summary.last_line
     or ""
@@ -221,6 +223,12 @@ function row(task)
     elapsed((task.finished or env.now()) - task.started)
   )
   return { text = how ~= "" and text .. " · " .. how or text, icon = look.icon, hl = look.hl }
+end
+
+--- `text`'s first line, with … when more was cut: a heredoc command is one row.
+function first_line(text)
+  local first, rest = text:match("^([^\n]*)\n(.*)$")
+  return first and first .. (vim.trim(rest) ~= "" and " …" or "") or text
 end
 
 --- How a task's icon looks: the working spinner while it runs, then done or
