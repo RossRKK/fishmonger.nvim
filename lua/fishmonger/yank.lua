@@ -14,17 +14,27 @@ local MARK = "\226\128\140" -- U+200C
 -- The blank columns Claude draws left of a reply's rows (the bullet's, on its first).
 local MARGIN = 2
 
+-- How much of a transcript's end to read: transcripts grow to tens of MB.
+local TRANSCRIPT_TAIL = 512 * 1024
+
+-- Bytes either side of a join that are looked up in the reply text.
+local JOIN_CONTEXT = 20
+
 -- Defined below, in top-down order.
-local on_yank, wraps, drop_margin, is_marked, is_blank, rows_after, write_register
+local on_yank, wraps, gap_at, drop_margin, is_marked, is_blank, rows_after, write_register
+local recent_replies
 
 --- Unwrap yanks in buffers of `filetype` (fishmonger's terminals).
+--- `transcript_of(buf)` is the JSONL transcript of the session in `buf`, if any.
 ---@param filetype string
-function M.setup(filetype)
+---@param transcript_of? fun(buf: integer): string?
+function M.setup(filetype, transcript_of)
+  transcript_of = transcript_of or function() end
   vim.api.nvim_create_autocmd("TextYankPost", {
     group = vim.api.nvim_create_augroup("FishmongerYank", { clear = true }),
     callback = function(args)
       if vim.bo[args.buf].filetype == filetype then
-        on_yank(args.buf)
+        on_yank(args.buf, transcript_of)
       end
     end,
   })
@@ -36,20 +46,24 @@ end
 --- following the yank up to the next blank, and `cols` the wrap width: a row
 --- that fills it was cut mid-word, so it joins without a space. `first_col` is
 --- where in its row the yank starts, so a start inside the margin drops the rest.
+--- `replies` is the session's recent reply text: a join it settles beats `cols`,
+--- which is wrong for rows drawn before the window was resized.
 ---@param rows string[]
 ---@param source string[]
 ---@param after string[]
 ---@param cols integer
 ---@param first_col integer
+---@param replies? string
 ---@return string[]
-function M.unwrap(rows, source, after, cols, first_col)
+function M.unwrap(rows, source, after, cols, first_col, replies)
   local wrapped = wraps(source, after)
   local out, current = {}, nil
   for i, row in ipairs(rows) do
     local text = row:gsub(MARK, "")
     if current then
-      local gap = vim.fn.strdisplaywidth(source[i - 1]) >= cols and "" or " "
-      current = current:gsub("%s+$", "") .. gap .. text:gsub("^%s+", "")
+      local left, right = current:gsub("%s+$", ""), text:gsub("^%s+", "")
+      local fills = vim.fn.strdisplaywidth(source[i - 1]) >= cols
+      current = left .. gap_at(left, right, fills, replies) .. right
     elseif wrapped[i] or is_marked(source[i]) then
       current = drop_margin(text, i == 1 and first_col or 0)
     else
@@ -63,7 +77,7 @@ function M.unwrap(rows, source, after, cols, first_col)
   return out
 end
 
-function on_yank(buf)
+function on_yank(buf, transcript_of)
   local ev = vim.v.event
   local blockwise = ev.regtype:sub(1, 1) == "\22"
   if ev.operator ~= "y" or blockwise or not table.concat(ev.regcontents):find(MARK, 1, true) then
@@ -73,8 +87,15 @@ function on_yank(buf)
   local last = first + #ev.regcontents - 1
   local source = vim.api.nvim_buf_get_lines(buf, first - 1, last, false)
   local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
-  local rows =
-    M.unwrap(ev.regcontents, source, rows_after(buf, last), info.width - info.textoff, first_col)
+  local transcript = transcript_of(buf)
+  local rows = M.unwrap(
+    ev.regcontents,
+    source,
+    rows_after(buf, last),
+    info.width - info.textoff,
+    first_col,
+    transcript and recent_replies(transcript)
+  )
   write_register(ev.regname, rows, ev.regtype)
 end
 
@@ -93,6 +114,48 @@ function wraps(source, after)
     end
   end
   return out
+end
+
+--- The gap a wrap join between `left` and `right` gets. Markdown rendering
+--- changes the screen's text, so only the bytes either side of the join are
+--- looked up in `replies`; when exactly one way of joining is there it wins,
+--- and otherwise a row that `fills` the window was cut mid-word.
+function gap_at(left, right, fills, replies)
+  local tail, head = left:sub(-JOIN_CONTEXT), right:sub(1, JOIN_CONTEXT)
+  local joined = replies ~= nil and replies:find(tail .. head, 1, true) ~= nil
+  local spaced = replies ~= nil and replies:find(tail .. " " .. head, 1, true) ~= nil
+  if joined ~= spaced then
+    return joined and "" or " "
+  end
+  return fills and "" or " "
+end
+
+--- The text of the assistant replies near the end of transcript `path`, or nil
+--- when it can't be read. A read that starts mid-file starts mid-line, so the
+--- first line is skipped then.
+function recent_replies(path)
+  local f = io.open(path, "rb")
+  if not f then
+    return nil
+  end
+  local size = f:seek("end")
+  f:seek("set", math.max(0, size - TRANSCRIPT_TAIL))
+  local lines = vim.split(f:read("*a"), "\n", { plain = true })
+  f:close()
+  local texts = {}
+  for i = size > TRANSCRIPT_TAIL and 2 or 1, #lines do
+    local ok, entry = pcall(vim.json.decode, lines[i])
+    local content = ok
+      and type(entry) == "table"
+      and entry.type == "assistant"
+      and vim.tbl_get(entry, "message", "content")
+    for _, block in ipairs(type(content) == "table" and content or {}) do
+      if block.type == "text" then
+        texts[#texts + 1] = block.text
+      end
+    end
+  end
+  return table.concat(texts, "\n")
 end
 
 --- `text` without the part of Claude's blank margin it holds, given that it

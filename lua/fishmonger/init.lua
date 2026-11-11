@@ -1348,7 +1348,10 @@ function M.setup(opts)
     end
   end)
   -- Yanks of Claude's replies come back unwrapped (fishmonger/yank.lua).
-  require("fishmonger.yank").setup(config.filetype)
+  require("fishmonger.yank").setup(config.filetype, function(buf)
+    local record = agent.for_buf(buf, shell_pid)
+    return record and record.transcript
+  end)
   -- The background-task list under each agent's terminal.
   require("fishmonger.tasks").setup({
     terminal_windows = function(tab)

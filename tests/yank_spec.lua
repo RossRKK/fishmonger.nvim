@@ -100,6 +100,49 @@ describe("yank.unwrap", function()
     end
   )
 
+  describe("with the session's reply text", function()
+    -- Drawn at 80 columns, then yanked from a window widened to COLS.
+    local rows = {
+      "  curl -H 'Authorization: Bearer x' https://example.com/v1/projects/ionics-shared/l",
+      "  ocations/europe-west2/clusters" .. M,
+    }
+
+    it("joins a cut on a row narrower than the window without a space", function()
+      local replies =
+        "Try:\ncurl -H 'Authorization: Bearer x' https://example.com/v1/projects/ionics-shared/locations/europe-west2/clusters\n"
+
+      assert.same({
+        "curl -H 'Authorization: Bearer x' https://example.com/v1/projects/ionics-shared/locations/europe-west2/clusters",
+      }, yank.unwrap(rows, rows, {}, COLS, 0, replies))
+    end)
+
+    it("keeps a word wrap's space on a row that fills the window", function()
+      local full = "  " .. ("word "):rep(20) .. "edge"
+      local wrapped = { full, "  next." .. M }
+      local replies = "**Note:** " .. ("word "):rep(20) .. "edge next."
+
+      assert.same(
+        { ("word "):rep(20) .. "edge next." },
+        yank.unwrap(wrapped, wrapped, {}, #full, 0, replies)
+      )
+    end)
+
+    it("falls back to the window width when there is none", function()
+      assert.same({
+        "curl -H 'Authorization: Bearer x' https://example.com/v1/projects/ionics-shared/l ocations/europe-west2/clusters",
+      }, yank.unwrap(rows, rows, {}, COLS, 0, nil))
+    end)
+
+    it("falls back to the window width when neither join is in it", function()
+      local long = "  " .. ("x"):rep(COLS - 2)
+
+      assert.same(
+        { long:sub(3) .. "yz" },
+        yank.unwrap({ long, "  yz" .. M }, { long, "  yz" .. M }, {}, COLS, 0, "unrelated")
+      )
+    end)
+  end)
+
   it("decides by the source row, not a charwise yank's fragment of it", function()
     local source = {
       "  Probe paragraph: this is one long markdown paragraph written as a single source line, so Claude has",
@@ -137,6 +180,32 @@ describe("yank on TextYankPost", function()
     vim.cmd("normal! ggVjy")
 
     assert.same({ "plain", "output" }, vim.fn.getreg('"', 1, true))
+  end)
+
+  it("joins by the reply text in the session's transcript", function()
+    local transcript = vim.fn.tempname()
+    vim.fn.writefile({
+      vim.json.encode({ type = "user", message = { content = "the url?" } }),
+      vim.json.encode({
+        type = "assistant",
+        message = { content = { { type = "text", text = "See https://example.com/locations/x" } } },
+      }),
+    }, transcript)
+    yank.setup("fishmonger", function()
+      return transcript
+    end)
+    vim.api.nvim_buf_set_lines(
+      buf,
+      0,
+      -1,
+      false,
+      { "  See https://example.com/l", "  ocations/x" .. M }
+    )
+
+    vim.cmd("normal! ggVjy")
+
+    assert.same({ "See https://example.com/locations/x" }, vim.fn.getreg('"', 1, true))
+    vim.fn.delete(transcript)
   end)
 
   it("leaves other filetypes' yanks alone", function()
