@@ -21,7 +21,7 @@ local TRANSCRIPT_TAIL = 512 * 1024
 local JOIN_CONTEXT = 20
 
 -- Defined below, in top-down order.
-local on_yank, wraps, gap_at, drop_margin, is_marked, is_blank, rows_after, write_register
+local on_yank, wraps, gap_at, hang_of, drop_indent, is_marked, is_blank, rows_after, write_register
 local recent_replies
 
 --- Unwrap yanks in buffers of `filetype` (fishmonger's terminals).
@@ -43,9 +43,13 @@ end
 --- The yanked `rows` with Claude's wraps joined and the marks removed.
 --- `source` holds the whole buffer row each yanked row came from (a charwise
 --- yank's first and last rows are fragments of theirs), `after` the buffer rows
---- following the yank up to the next blank, and `cols` the wrap width: a row
---- that fills it was cut mid-word, so it joins without a space. `first_col` is
---- where in its row the yank starts, so a start inside the margin drops the rest.
+--- following the yank up to the next blank, and `cols` the wrap width. The
+--- renderer keeps a wrap's space: at the end of a row that stops short of the
+--- edge (where the terminal drops it), or past the indent of the next row when
+--- a word ends flush with the edge. So a row that fills `cols` and is followed
+--- by one starting at its indent was cut mid-word, and joins without a space.
+--- `first_col` is where in its row the yank starts, so a start inside the margin
+--- drops the rest.
 --- `replies` is the session's recent reply text: a join it settles beats `cols`,
 --- which is wrong for rows drawn before the window was resized.
 ---@param rows string[]
@@ -57,15 +61,19 @@ end
 ---@return string[]
 function M.unwrap(rows, source, after, cols, first_col, replies)
   local wrapped = wraps(source, after)
-  local out, current = {}, nil
+  local out, current, hang = {}, nil, MARGIN
   for i, row in ipairs(rows) do
     local text = row:gsub(MARK, "")
     if current then
-      local left, right = current:gsub("%s+$", ""), text:gsub("^%s+", "")
+      local left, indented = current:gsub("%s+$", ""), drop_indent(text, hang)
+      local right = indented:gsub("^%s+", "")
       local fills = vim.fn.strdisplaywidth(source[i - 1]) >= cols
-      current = left .. gap_at(left, right, fills, replies) .. right
+      local gap = right ~= indented and " " or gap_at(left, right, fills, replies)
+      current = left .. gap .. right
     elseif wrapped[i] or is_marked(source[i]) then
-      current = drop_margin(text, i == 1 and first_col or 0)
+      local col = i == 1 and first_col or 0
+      current = drop_indent(text, math.max(0, MARGIN - col))
+      hang = hang_of(source[i])
     else
       current = text
     end
@@ -158,11 +166,18 @@ function recent_replies(path)
   return table.concat(texts, "\n")
 end
 
---- `text` without the part of Claude's blank margin it holds, given that it
---- starts at column `col` of its row; a bullet is not blank, so it stays.
-function drop_margin(text, col)
-  local held = math.max(0, MARGIN - col)
-  return text:sub(1, held):match("^ *$") and text:sub(held + 1) or text
+--- The indent of the rows a paragraph starting with `row` wraps onto: its own,
+--- past any list marker, and at least Claude's margin (which holds the bullet).
+function hang_of(row)
+  local indent = #row:match("^ *")
+  local marker = row:match("^[-*+] ", indent + 1) or row:match("^%d+[.)] ", indent + 1) or ""
+  return math.max(MARGIN, indent + #marker)
+end
+
+--- `text` without its first `width` columns when they are blank; a bullet is
+--- not blank, so it stays.
+function drop_indent(text, width)
+  return text:sub(1, width):match("^ *$") and text:sub(width + 1) or text
 end
 
 function is_marked(row)

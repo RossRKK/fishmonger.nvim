@@ -54,6 +54,27 @@ describe("yank.unwrap", function()
     assert.same({ long:sub(3) .. "yz" }, unwrap({ long, "  yz" .. M }))
   end)
 
+  describe("a word that ends flush with the edge", function()
+    -- The renderer moves the break space to the start of the next row.
+    local rows = {
+      "  - We read the build Job (found by the honcho's job-naming rule) so we can show a build as complete or",
+      "     failed, with its start and end times." .. M,
+    }
+    local joined =
+      "- We read the build Job (found by the honcho's job-naming rule) so we can show a build as complete or failed, with its start and end times."
+
+    it("keeps the break space the next row starts with", function()
+      assert.same({ joined }, unwrap(rows))
+    end)
+
+    it("keeps it when markdown keeps the join out of the reply text", function()
+      local replies =
+        "- We read the **build Job** (found by the honcho's job-naming rule) so we can show a **build as complete or failed**, with its start and end times."
+
+      assert.same({ joined }, yank.unwrap(rows, rows, {}, COLS, 0, replies))
+    end)
+  end)
+
   it("drops Claude's margin from every real line, keeping the bullet and deeper indents", function()
     local rows =
       { "● Opening line." .. M, "  - item" .. M, "    - nested" .. M, "      code indent" .. M }
