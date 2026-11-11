@@ -738,9 +738,16 @@ local function show_in(win, slot, opts)
 end
 
 -- Show the terminal in `slot` in the target window (see target_window),
--- opening the side panel when no terminal window is open.
+-- opening the side panel when no terminal window is open. opts.tab shows it in
+-- that tabpage instead, leaving focus where it is.
 function M.show(slot, opts)
-  local tab = vim.api.nvim_get_current_tabpage()
+  local tab = opts and opts.tab or vim.api.nvim_get_current_tabpage()
+  if tab ~= vim.api.nvim_get_current_tabpage() then
+    vim.api.nvim_win_call(vim.api.nvim_tabpage_get_win(tab), function()
+      M.show(slot, vim.tbl_extend("force", opts, { tab = tab, insert = false }))
+    end)
+    return
+  end
   show_in(target_window(st(tab), tab), slot, opts)
 end
 

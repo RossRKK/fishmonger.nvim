@@ -131,6 +131,21 @@ describe("terms.show", function()
     assert.same({ 9 }, slots_of(terms))
     assert.equals(9, terms.current)
   end)
+
+  it("starts a terminal in another tabpage without leaving this one", function()
+    local here, win = vim.api.nvim_get_current_tabpage(), vim.api.nvim_get_current_win()
+    vim.cmd("tabnew")
+    local there = vim.api.nvim_get_current_tabpage()
+    vim.api.nvim_set_current_tabpage(here)
+
+    terms.show(1, { tab = there })
+
+    assert.equals(win, vim.api.nvim_get_current_win())
+    assert.same({}, slots_of(terms))
+    vim.api.nvim_set_current_tabpage(there)
+    assert.same({ 1 }, slots_of(terms))
+    assert.equals(1, open_slot(terms))
+  end)
 end)
 
 describe("terms.new", function()
