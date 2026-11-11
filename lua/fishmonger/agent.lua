@@ -21,6 +21,8 @@
 
 local M = {}
 
+local coalesce = require("fishmonger.coalesce")
+
 -- state -> how it shows up. `attention` is the whole point of the module: those
 -- are the states that mean the agent has stopped and cannot continue without
 -- you, and they are what a background workspace needs to be able to shout.
@@ -322,7 +324,7 @@ local function sync_spinner()
   local want = spinning_somewhere()
   if want and not spin.timer then
     spin.timer = vim.uv.new_timer()
-    spin.timer:start(0, 150, vim.schedule_wrap(tick))
+    spin.timer:start(0, 150, coalesce(tick))
   elseif not want and spin.timer then
     spin.timer:stop()
     spin.timer:close()
@@ -421,7 +423,7 @@ function M.setup(opts, on_change, on_tick)
     M._watcher:close()
   end
   local watcher = vim.uv.new_fs_event()
-  if watcher and watcher:start(config.dir, {}, vim.schedule_wrap(refresh)) == 0 then
+  if watcher and watcher:start(config.dir, {}, coalesce(refresh)) == 0 then
     M._watcher = watcher
   elseif watcher then
     watcher:close()

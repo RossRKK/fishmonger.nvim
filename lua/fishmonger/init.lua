@@ -455,6 +455,7 @@ function M.title_icon(title)
 end
 
 local agent = require("fishmonger.agent")
+local coalesce = require("fishmonger.coalesce")
 
 --- The agent status of a terminal: the record the hook wrote, plus its `look`
 --- (icon/hl/label/attention). Nil when nothing is reporting from that terminal.
@@ -916,7 +917,7 @@ function follow_file(path, on_bytes)
   end
   read_new()
   local event = vim.uv.new_fs_event()
-  event:start(path, {}, vim.schedule_wrap(read_new))
+  event:start(path, {}, coalesce(read_new))
   return {
     stop = function()
       if not event:is_closing() then
