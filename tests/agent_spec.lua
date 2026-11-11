@@ -426,11 +426,7 @@ describe("agent spinner", function()
     assert.has_error(table.remove(queue))
     assert.equals(1, ticks)
     -- The erroring tick didn't wedge the spinner: the next fire queues again.
-    vim.schedule = function(cb) ---@diagnostic disable-line: duplicate-set-field
-      queue[#queue + 1] = cb
-    end
     fire()
-    vim.schedule = real_schedule
     assert.equals(1, #queue)
   end)
 end)

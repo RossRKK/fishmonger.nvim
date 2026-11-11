@@ -12,12 +12,13 @@
 ---@return fun()
 return function(fn, schedule)
   local pending = false
+  schedule = schedule or vim.schedule
   return function()
     if pending then
       return
     end
     pending = true
-    ;(schedule or vim.schedule)(function()
+    schedule(function()
       -- Cleared before the call, so a call that errors doesn't stop later fires.
       pending = false
       fn()
