@@ -51,6 +51,11 @@ terminal whose shell pid appears in it, which stays exact with several agents in
 one directory. `agent_pid` is checked against `/proc`, so a killed agent's file
 is reaped rather than showing as blocked forever.
 
+Read and unread are yours, kept in nvim rather than in the file: `<C-b>r` shows
+the current terminal's agent as read (an empty circle) and `<C-b>u` as unread
+(a question mark), whatever its state, until the agent writes its next status.
+Entering terminal mode in a finished agent's terminal marks it read.
+
 For Claude Code, an `agent-status` hook script writes those files from
 `UserPromptSubmit` / `PreToolUse` / `Notification` / `Stop` / `SessionEnd`. Any
 agent that writes the same shape works.
@@ -73,6 +78,7 @@ agent that writes the same shape works.
 | `tabs(tab?)`                   | A tabpage's terminals as `{ slot, title, icon, hl, agent }`. `icon` is the status glyph: the agent's reported state, else the OSC title's leading glyph. |
 | `agents()`                     | Every reporting agent across every tabpage, blocked ones first. |
 | `focus(entry)`                 | Switch to an `agents()` entry's tabpage and surface its terminal. |
+| `mark(kind)`                   | `<C-b>r` (`"read"`) / `<C-b>u` (`"unread"`): mark the current terminal's agent until its next status write. |
 | `transfer(tab)`                | Carry the current terminal (live process, scrollback and all) into tabpage `tab`'s lowest free slot and follow it. The process's cwd does not change. |
 | `transfer_to(n)`               | `<C-b>mN`: `transfer` to workspace N — `setup({ workspace = fn(n) -> tab })`'s numbering, else the Nth tabpage. |
 | `transfer_pick()`              | `vim.ui.select` over the other tabpages by project name, then `transfer`. |

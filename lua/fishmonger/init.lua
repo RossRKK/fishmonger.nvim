@@ -470,7 +470,7 @@ local function term_agent(term)
     return nil
   end
   return vim.tbl_extend("force", record, {
-    look = agent.look(record.state),
+    look = agent.look_of(record),
     colour_hl = agent.colour_hl(record.colour),
   })
 end
@@ -598,7 +598,7 @@ function M.agents()
       out[#out + 1] = {
         project = vim.fn.fnamemodify(record.cwd or "", ":t"),
         state = record.state,
-        look = agent.look(record.state),
+        look = agent.look_of(record),
         colour_hl = agent.colour_hl(record.colour),
         detail = record.detail,
         cwd = record.cwd,
@@ -655,6 +655,19 @@ function M.focus(entry)
   vim.api.nvim_set_current_tabpage(entry.tab)
   M.show(entry.slot)
   return true
+end
+
+--- Mark the current terminal's agent read or unread, until it next reports a status.
+---@param kind fishmonger.MarkKind
+function M.mark(kind)
+  local state = st()
+  local slot = current_slot(state)
+  local status = slot and term_agent(state.slots[slot])
+  if not status then
+    vim.notify("no agent in this terminal", vim.log.levels.WARN)
+    return
+  end
+  agent.mark(status.session, kind)
 end
 
 -- Announce a tabpage's tab set whenever it (or a tab's title) changes, as a
@@ -1371,6 +1384,17 @@ function M.setup(opts)
       end)
     end,
   })
+  -- Terminal mode, not WinEnter: restoring or starting a terminal in the
+  -- background passes through its window without you ever reading it.
+  vim.api.nvim_create_autocmd("TermEnter", {
+    group = grp,
+    callback = function(args)
+      local record = agent.for_buf(args.buf, shell_pid)
+      if record then
+        agent.visit(record.session)
+      end
+    end,
+  })
   -- Re-evaluate a function width when the screen resizes so the side window keeps
   -- its share. winfixwidth pins it against incidental splits, not VimResized.
   -- Every tabpage's side window is resized, not just the visible one: an unseen
@@ -1494,6 +1518,10 @@ function M.setup_keymaps()
       -- waiting on an agent, where the free keys are the ones already routed
       -- through here.
       require("fishmonger.view").popup()
+    elseif key == "r" then
+      M.mark("read")
+    elseif key == "u" then
+      M.mark("unread")
     elseif key == "z" then
       M.zoom()
     elseif key == "Z" then
@@ -1533,7 +1561,7 @@ function M.setup_keymaps()
     "<C-b>",
     tab_prefix,
     {
-      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / Z maximise / & kill / . move / mN to workspace / a agents)',
+      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / Z maximise / & kill / . move / mN to workspace / a agents / r mark read / u mark unread)',
     }
   )
 end

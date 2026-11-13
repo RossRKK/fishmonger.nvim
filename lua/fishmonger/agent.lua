@@ -54,6 +54,19 @@ M.states = {
   new = { icon = "\xef\x84\x8c", hl = "Comment", label = "new" }, --
 }
 
+---@alias fishmonger.MarkKind "read"|"unread"
+
+---@class fishmonger.Mark
+---@field kind fishmonger.MarkKind
+---@field revision string the record revision it was made on; a newer write voids it
+
+-- How a status you marked shows until the agent next writes one: read rests like
+-- a new session, unread asks for you like a follow-up.
+M.mark_looks = {
+  read = { icon = M.states.new.icon, hl = "Comment", label = "read" },
+  unread = { icon = M.states.asked.icon, hl = "DiagnosticHint", label = "unread", attention = true },
+}
+
 -- Glyphs are one or two cells wide (an emoji is two), so each is drawn in a
 -- fixed slot: whatever follows it starts in the same column whichever shows.
 local GLYPH_CELLS = 2
@@ -91,9 +104,15 @@ local config = {
 }
 
 -- session id -> record, as read from disk:
---   { session, state, detail, cwd, pids = {…}, agent_pid, colour? }
--- where `colour` comes from the <agent_pid>.colour claim the launcher wrote.
+--   { session, state, detail, cwd, pids = {…}, agent_pid, revision, colour? }
+-- where `colour` comes from the <agent_pid>.colour claim the launcher wrote and
+-- `revision` names the write of the file the record was read from.
 local sessions = {}
+
+-- session id -> the viewer's mark on its status. Kept here, not in the hook's
+-- file: the hook rewrites that on every event, and read/unread is nvim's business.
+---@type table<string, fishmonger.Mark>
+local marks = {}
 
 -- session id -> its background tasks in launch order, each
 --   { id, description, command, output, started, finished? }
@@ -114,15 +133,23 @@ local notify = function() end
 -- is enough. Dropped with the buffer in forget().
 local pids = {}
 
+--- A JSON file's table, and its revision: its mtime, taken from the same open
+--- file so a rename landing between the read and the stat can't mismatch them.
+---@param path string
+---@return table? decoded, string? revision
 local function read_json(path)
-  local f = io.open(path, "r")
-  if not f then
+  local fd = vim.uv.fs_open(path, "r", 0)
+  if not fd then
     return nil
   end
-  local data = f:read("*a")
-  f:close()
-  local ok, decoded = pcall(vim.json.decode, data)
-  return ok and type(decoded) == "table" and decoded or nil
+  local stat = vim.uv.fs_fstat(fd)
+  local data = stat and vim.uv.fs_read(fd, stat.size, 0)
+  vim.uv.fs_close(fd)
+  local ok, decoded = pcall(vim.json.decode, data or "")
+  if not (ok and type(decoded) == "table") then
+    return nil
+  end
+  return decoded, ("%d.%09d"):format(stat.mtime.sec, stat.mtime.nsec)
 end
 
 --- Is the agent process behind this record still running? A session file
@@ -199,9 +226,10 @@ local function reload()
     end
     local path = config.dir .. "/" .. name
     if name:match("%.json$") then
-      local record = read_json(path)
+      local record, revision = read_json(path)
       if record and record.session then
         if alive(record) then
+          record.revision = revision
           sessions[record.session] = record
         else
           -- Reap it here rather than leaving it for the next session to trip
@@ -218,6 +246,11 @@ local function reload()
       task_records[#task_records + 1] = read_json(path)
     elseif name:match("^%d+%.colour$") then
       claims[tonumber(name:match("^%d+"))] = read_json(path)
+    end
+  end
+  for session in pairs(marks) do
+    if not sessions[session] then
+      marks[session] = nil
     end
   end
   for _, record in pairs(sessions) do
@@ -353,6 +386,65 @@ function M.look(state)
     return nil
   end
   return M.states[state] or { icon = M.states.busy.icon, hl = M.states.busy.hl, label = state }
+end
+
+--- How a session record shows right now: its state's look, or the look of your mark on it.
+---@param record table a record from M.all() or M.for_buf()
+---@return table?
+function M.look_of(record)
+  return M.shown_look(record, marks[record.session])
+end
+
+--- Mark a session's current status read or unread, until the agent next writes one.
+---@param session string
+---@param kind fishmonger.MarkKind
+function M.mark(session, kind)
+  local record = sessions[session]
+  if record then
+    marks[session] = { kind = kind, revision = record.revision }
+    notify()
+  end
+end
+
+--- You are in this session's terminal: a finished turn there is now read.
+---@param session string
+function M.visit(session)
+  local record = sessions[session]
+  if not record then
+    return
+  end
+  local mark = M.visited(record, marks[session])
+  if mark ~= marks[session] then
+    marks[session] = mark
+    notify()
+  end
+end
+
+--- Does `mark` still stand for `record`, i.e. was it made on this write of it?
+---@param record table
+---@param mark? fishmonger.Mark
+---@return boolean
+local function stands(record, mark)
+  return mark ~= nil and mark.revision == record.revision
+end
+
+--- How `record` shows under `mark`: the mark's look while it stands, else the state's.
+---@param record table
+---@param mark? fishmonger.Mark
+---@return table?
+function M.shown_look(record, mark)
+  return stands(record, mark) and M.mark_looks[mark.kind] or M.look(record.state)
+end
+
+--- The mark visiting `record` leaves: a finished turn with no standing mark becomes read.
+---@param record table
+---@param mark? fishmonger.Mark
+---@return fishmonger.Mark?
+function M.visited(record, mark)
+  if record.state == "done" and not stands(record, mark) then
+    return { kind = "read", revision = record.revision }
+  end
+  return mark
 end
 
 --- Re-read the status directory right now, synchronously, and repaint. The
