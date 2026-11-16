@@ -1,13 +1,13 @@
 -- Yanking Claude Code's replies out of a terminal (fishmonger/yank.lua). The
 -- claude-plugins/line-end-marks mod in the dotfiles ends every real line of a
--- reply with U+200C; Claude still hard-wraps to the terminal width. The rows
+-- reply with a pilcrow (¶); Claude still hard-wraps to the terminal width. The rows
 -- here are as a 103-column terminal stored them.
 
 local assert = require("luassert")
 
 local yank = require("fishmonger.yank")
 
-local M = "\226\128\140" -- U+200C
+local M = "¶"
 local COLS = 103
 
 --- `unwrap` for a yank of whole rows, with nothing after it in the buffer.
@@ -52,6 +52,26 @@ describe("yank.unwrap", function()
     local long = "  " .. ("x"):rep(COLS - 2)
 
     assert.same({ long:sub(3) .. "yz" }, unwrap({ long, "  yz" .. M }))
+  end)
+
+  it("joins a row whose mark the edge pushed onto a row of its own", function()
+    local long = "  " .. ("x"):rep(COLS - 2)
+
+    assert.same({ long:sub(3) }, unwrap({ long, "  " .. M }))
+  end)
+
+  it("keeps a pilcrow the reply wrote mid-line", function()
+    assert.same({ "a ¶ b" }, unwrap({ "  a ¶ b" .. M }))
+  end)
+
+  it("keeps a pilcrow the reply wrote at a line's end, dropping only the mark", function()
+    assert.same({ "see ¶" }, unwrap({ "  see ¶" .. M }))
+  end)
+
+  it("keeps a pilcrow a charwise yank stops just after", function()
+    local source = { "  a ¶ b" .. M }
+
+    assert.same({ "a ¶" }, yank.unwrap({ "a ¶" }, source, {}, COLS, 2))
   end)
 
   describe("a word that ends flush with the edge", function()
@@ -201,6 +221,14 @@ describe("yank on TextYankPost", function()
     vim.cmd("normal! ggVjy")
 
     assert.same({ "plain", "output" }, vim.fn.getreg('"', 1, true))
+  end)
+
+  it("leaves a yank alone whose only pilcrows are mid-line", function()
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "  a ¶ b", "  c" })
+
+    vim.cmd("normal! ggVjy")
+
+    assert.same({ "  a ¶ b", "  c" }, vim.fn.getreg('"', 1, true))
   end)
 
   it("joins by the reply text in the session's transcript", function()

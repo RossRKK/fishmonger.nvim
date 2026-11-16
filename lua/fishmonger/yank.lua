@@ -1,7 +1,7 @@
 -- Yanks of Claude Code's replies come back as the lines Claude wrote, not the
 -- rows it hard-wrapped them into. The line-end-marks mod (in the dotfiles'
--- claude-plugins) ends every real line Claude draws with an invisible U+200C,
--- so in the terminal's text a wrap and a newline look different.
+-- claude-plugins) ends every real line Claude draws with a pilcrow (¶), so in
+-- the terminal's text a wrap and a newline look different.
 --
 -- A row is a wrap when it is unmarked and a marked row closes its paragraph
 -- before the next blank row. Rows no mark closes -- tool output, tables, rules,
@@ -9,7 +9,7 @@
 
 local M = {}
 
-local MARK = "\226\128\140" -- U+200C
+local MARK = "¶"
 
 -- The blank columns Claude draws left of a reply's rows (the bullet's, on its first).
 local MARGIN = 2
@@ -21,7 +21,7 @@ local TRANSCRIPT_TAIL = 512 * 1024
 local JOIN_CONTEXT = 20
 
 -- Defined below, in top-down order.
-local on_yank, wraps, gap_at, hang_of, drop_indent, is_marked, is_blank, rows_after, write_register
+local on_yank, wraps, gap_at, hang_of, drop_indent, is_marked, unmark, is_blank, rows_after, write_register
 local recent_replies
 
 --- Unwrap yanks in buffers of `filetype` (fishmonger's terminals).
@@ -63,7 +63,8 @@ function M.unwrap(rows, source, after, cols, first_col, replies)
   local wrapped = wraps(source, after)
   local out, current, hang = {}, nil, MARGIN
   for i, row in ipairs(rows) do
-    local text = row:gsub(MARK, "")
+    local col = i == 1 and first_col or 0
+    local text = unmark(row, source[i], col)
     if current then
       local left, indented = current:gsub("%s+$", ""), drop_indent(text, hang)
       local right = indented:gsub("^%s+", "")
@@ -71,7 +72,6 @@ function M.unwrap(rows, source, after, cols, first_col, replies)
       local gap = right ~= indented and " " or gap_at(left, right, fills, replies)
       current = left .. gap .. right
     elseif wrapped[i] or is_marked(source[i]) then
-      local col = i == 1 and first_col or 0
       current = drop_indent(text, math.max(0, MARGIN - col))
       hang = hang_of(source[i])
     else
@@ -88,7 +88,7 @@ end
 function on_yank(buf, transcript_of)
   local ev = vim.v.event
   local blockwise = ev.regtype:sub(1, 1) == "\22"
-  if ev.operator ~= "y" or blockwise or not table.concat(ev.regcontents):find(MARK, 1, true) then
+  if ev.operator ~= "y" or blockwise or not vim.iter(ev.regcontents):any(is_marked) then
     return
   end
   local first, first_col = unpack(vim.api.nvim_buf_get_mark(buf, "["))
@@ -182,6 +182,14 @@ end
 
 function is_marked(row)
   return row:gsub("%s+$", ""):sub(-#MARK) == MARK
+end
+
+--- `row`, a yank of `whole` from byte `start`, without the mark ending `whole`;
+--- a ¶ anywhere else is the reply's own.
+function unmark(row, whole, start)
+  local text, line = row:gsub("%s+$", ""), whole:gsub("%s+$", "")
+  local at_end = start + #text >= #line
+  return at_end and is_marked(line) and text:sub(1, -#MARK - 1) or row
 end
 
 function is_blank(row)
