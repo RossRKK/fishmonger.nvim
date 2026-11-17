@@ -9,7 +9,8 @@
 -- workspace N (tmux move-window -t other-session; a config numbers its
 -- workspaces via setup({ workspace }), else N is the tabpage number). <C-b>" and
 -- <C-b>% split a new shell into a pane, <C-b>x kills a pane, and <C-b> arrows
--- move between panes. <C-t> toggles the side slot.
+-- move between panes, and <C-b>f lists the files the agent referenced. <C-t>
+-- toggles the side slot.
 --
 -- Model (the tmux-pane model): the side panel (M.win) lives in the right slot,
 -- and <C-b>t opens a terminal in any other window too. Every terminal window
@@ -64,6 +65,11 @@ local config = {
   -- their left) passes its own lookup, returning nil for a number not in use.
   ---@type nil|fun(n: integer): integer?
   workspace = nil,
+  -- How the referenced-files list (<C-b>f) opens a file at a line. Nil edits it
+  -- in the tabpage's widest window outside the side panel; a config that routes
+  -- files to its own main window passes its opener.
+  ---@type nil|fun(path: string, line?: integer)
+  open_file = nil,
 }
 
 -- Resolve the configured width to a column count.
@@ -1060,6 +1066,32 @@ local function main_window(tab)
   return best
 end
 
+-- Edit `path` in the tabpage's editor area, at `line` when given; with none
+-- open, one opens left of the panel rather than the file replacing a list.
+local function open_in_main(path, line)
+  local win = main_window(vim.api.nvim_get_current_tabpage())
+  if win then
+    vim.api.nvim_set_current_win(win)
+  else
+    vim.cmd("topleft vsplit")
+  end
+  vim.cmd.edit(vim.fn.fnameescape(path))
+  if line then
+    local last = vim.api.nvim_buf_line_count(0)
+    vim.api.nvim_win_set_cursor(0, { math.min(math.max(line, 1), last), 0 })
+  end
+end
+
+-- <C-b>f: the list of files the target terminal's agent referenced, opened
+-- under it (fishmonger/files.lua), or closed when it is open.
+function M.files()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local win = target_window(st(tab), tab)
+  if win then
+    require("fishmonger.files").toggle(win)
+  end
+end
+
 -- <C-b>Z: the side terminal takes the main window and the panel closes -- a
 -- real layout change, unlike zoom, so the rest of the tabpage stays usable.
 -- From a terminal in the editor area it docks back, the window returning to
@@ -1368,6 +1400,20 @@ function M.setup(opts)
     open_output = M.open_output,
     side_var = SIDE,
   })
+  -- The referenced-files list, under a terminal on <C-b>f.
+  require("fishmonger.files").setup({
+    terminal_windows = function(tab)
+      return terminal_windows(st(tab), tab)
+    end,
+    session_of = function(buf)
+      local record = agent.for_buf(buf, shell_pid)
+      return record and record.transcript and { transcript = record.transcript, cwd = record.cwd }
+    end,
+    open_file = function(path, line)
+      (config.open_file or open_in_main)(path, line)
+    end,
+    side_var = SIDE,
+  })
   -- term_title changes arrive via TermRequest (Claude Code updates it live,
   -- including its input-needed marker); repaint the winbar and re-bubble the
   -- OS title on those. Defer the bubble: b:term_title is applied after the
@@ -1518,6 +1564,8 @@ function M.setup_keymaps()
       -- waiting on an agent, where the free keys are the ones already routed
       -- through here.
       require("fishmonger.view").popup()
+    elseif key == "f" then
+      M.files()
     elseif key == "r" then
       M.mark("read")
     elseif key == "u" then
@@ -1561,7 +1609,7 @@ function M.setup_keymaps()
     "<C-b>",
     tab_prefix,
     {
-      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / Z maximise / & kill / . move / mN to workspace / a agents / r mark read / u mark unread)',
+      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / Z maximise / & kill / . move / mN to workspace / a agents / f referenced files / r mark read / u mark unread)',
     }
   )
 end

@@ -20,6 +20,7 @@ local function fresh_terms()
   pcall(vim.cmd, "tabonly") -- drop leftover tabpages (state is per-tabpage)
   pcall(vim.cmd, "only") -- collapse leftover split windows from a prior test
   vim.w.fishmonger_side = nil -- the survivor may have been the side panel
+  vim.w.fishmonger_files_of = nil -- or a referenced-files list
   vim.wo.winfixwidth = false
   package.loaded["fishmonger"] = nil
   return require("fishmonger")
@@ -1361,5 +1362,99 @@ describe("agent poll wiring", function()
 
     assert.equals(1, synced)
     assert.same({}, events)
+  end)
+end)
+
+-- <C-b>f: the referenced-files list (fishmonger/files.lua) under the target
+-- terminal, fed by its agent's transcript and opening files in the editor area.
+describe("terms.files", function()
+  local terms, agent, real_for_buf, root
+
+  before_each(function()
+    terms = fresh_terms()
+    agent = require("fishmonger.agent")
+    real_for_buf = agent.for_buf
+    root = vim.fs.normalize(vim.fn.tempname())
+    vim.fn.mkdir(root, "p")
+    vim.fn.writefile({ "one", "two", "three" }, root .. "/a.lua")
+    local log = root .. "/session.jsonl"
+    vim.fn.writefile({
+      vim.json.encode({
+        type = "assistant",
+        message = { content = { { type = "text", text = "see a.lua:2" } } },
+      }),
+    }, log)
+    agent.for_buf = function() ---@diagnostic disable-line: duplicate-set-field
+      return { session = "s1", transcript = log, cwd = root }
+    end
+  end)
+
+  after_each(function()
+    agent.for_buf = real_for_buf
+  end)
+
+  --- Toggle the list from the editor and press <CR> on its first line.
+  local function open_first()
+    vim.o.columns = 200
+    local editor = vim.api.nvim_get_current_win()
+    local file = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(file, "fishmonger-spec-file-" .. file)
+    vim.api.nvim_win_set_buf(editor, file)
+    terms.show(1)
+    vim.api.nvim_set_current_win(editor)
+    terms.files()
+    vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+    return editor
+  end
+
+  it("lists the agent's files under its terminal, docked with it", function()
+    terms.setup({})
+    terms.show(1)
+
+    terms.files()
+
+    local list = vim.api.nvim_get_current_win()
+    assert.equals(terms.win, vim.w[list].fishmonger_files_of)
+    assert.is_true(vim.w[list].fishmonger_side)
+    assert.same({ "a.lua:2" }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+  end)
+
+  it("opens a file in the editor area at its line", function()
+    terms.setup({})
+
+    local editor = open_first()
+
+    assert.equals(editor, vim.api.nvim_get_current_win())
+    assert.equals(root .. "/a.lua", vim.api.nvim_buf_get_name(0))
+    assert.same({ 2, 0 }, vim.api.nvim_win_get_cursor(0))
+  end)
+
+  it("opens an editor area left of the panel when there is none", function()
+    terms.setup({})
+    terms.show(1)
+    vim.api.nvim_set_current_win(terms.win)
+    vim.cmd("only")
+    terms.files()
+    local list = vim.api.nvim_get_current_win()
+
+    vim.api.nvim_feedkeys(vim.keycode("<CR>"), "x", false)
+
+    assert.is_true(vim.api.nvim_win_is_valid(list))
+    assert.is_nil(vim.w.fishmonger_side)
+    assert.equals(0, vim.api.nvim_win_get_position(0)[2])
+    assert.equals(root .. "/a.lua", vim.api.nvim_buf_get_name(0))
+  end)
+
+  it("opens through the config's opener when it has one", function()
+    local opened = {}
+    terms.setup({
+      open_file = function(path, line)
+        opened[#opened + 1] = { path, line }
+      end,
+    })
+
+    open_first()
+
+    assert.same({ { root .. "/a.lua", 2 } }, opened)
   end)
 end)

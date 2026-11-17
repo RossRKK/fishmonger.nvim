@@ -42,7 +42,8 @@ It's fed by the agent writing a small JSON file per session into
 
 ```json
 { "session": "…", "state": "permission", "detail": "needs Bash",
-  "cwd": "/path", "agent_pid": 1234, "pids": [1234, 99, 1] }
+  "cwd": "/path", "agent_pid": 1234, "pids": [1234, 99, 1],
+  "transcript": "/path/to/session.jsonl" }
 ```
 
 `state` is one of `busy`, `permission`, `asking`, `plan`, `asked`, `idle`,
@@ -60,11 +61,23 @@ For Claude Code, an `agent-status` hook script writes those files from
 `UserPromptSubmit` / `PreToolUse` / `Notification` / `Stop` / `SessionEnd`. Any
 agent that writes the same shape works.
 
+## Referenced files
+
+`<C-b>f` opens a list under the terminal of the files its agent's session has
+read, edited or pointed at, most recent first and each once: file inputs of
+tool calls (`Read`, `Edit`, `Write`, `NotebookEdit`) and `path[:line]`
+references in its replies, read from the end of the session's Claude Code
+transcript. Relative paths are taken from the session's `cwd`; only files that
+exist are listed, with the line their latest reference gave. `<CR>` opens one
+(`setup({ open_file = fn(path, line) })` routes it, else the widest window
+outside the panel), `q` or `<C-b>f` again closes the list. It follows the
+terminal window's tab and re-reads when the transcript has changed.
+
 ## API
 
 | Function                       | Description                                         |
 | ------------------------------ | --------------------------------------------------- |
-| `setup(opts?)`                 | Initialise slot state and the side window. `opts.shell` overrides the shell command spawned in each terminal (default: `vim.o.shell`); `opts.agent` configures agent-status tracking (`{ dir, enabled }`); `opts.project_name(tab)` names a tabpage in the agent view; `opts.workspace(n)` resolves `<C-b>mN`'s workspace number to a tabpage. |
+| `setup(opts?)`                 | Initialise slot state and the side window. `opts.shell` overrides the shell command spawned in each terminal (default: `vim.o.shell`); `opts.agent` configures agent-status tracking (`{ dir, enabled }`); `opts.project_name(tab)` names a tabpage in the agent view; `opts.workspace(n)` resolves `<C-b>mN`'s workspace number to a tabpage; `opts.open_file(path, line)` opens a file from the referenced-files list. |
 | `setup_keymaps()`              | Register the `<C-b>` prefix tab keymaps.            |
 | `setup_exit()`                 | Wire terminal-exit cleanup.                          |
 | `show(slot, opts?)`            | Reveal/create the terminal in `slot` in the target window: the current terminal window, else the one used last, else the side panel. A tab already showing in another window swaps places with it. `opts.insert` controls whether focus enters insert mode; `opts.shell` starts a terminal the call creates with that command instead of the configured shell. |
@@ -79,6 +92,7 @@ agent that writes the same shape works.
 | `agents()`                     | Every reporting agent across every tabpage, blocked ones first. |
 | `focus(entry)`                 | Switch to an `agents()` entry's tabpage and surface its terminal. |
 | `mark(kind)`                   | `<C-b>r` (`"read"`) / `<C-b>u` (`"unread"`): mark the current terminal's agent until its next status write. |
+| `files()`                      | `<C-b>f`: toggle the referenced-files list under the target terminal. |
 | `transfer(tab)`                | Carry the current terminal (live process, scrollback and all) into tabpage `tab`'s lowest free slot and follow it. The process's cwd does not change. |
 | `transfer_to(n)`               | `<C-b>mN`: `transfer` to workspace N — `setup({ workspace = fn(n) -> tab })`'s numbering, else the Nth tabpage. |
 | `transfer_pick()`              | `vim.ui.select` over the other tabpages by project name, then `transfer`. |
@@ -88,7 +102,10 @@ See the source for the full slot API (new / move / transfer / toggle / kill).
 
 The side panel and the panes split from it carry `w:fishmonger_side`. A layout manager that docks it
 (edgy, say) should filter on that rather than the `fishmonger` filetype, so a
-terminal opened in the editor area with `<C-b>t` stays where it is.
+terminal opened in the editor area with `<C-b>t` stays where it is. The lists
+docked under a terminal carry it too, with filetypes `fishmonger-tasks` and
+`fishmonger-files`, and publish the height they want in `w:fishmonger_tasks_height`
+and `w:fishmonger_files_height` for a manager that sizes windows itself.
 
 ## Tests
 
