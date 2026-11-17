@@ -9,13 +9,12 @@
 
 local M = {}
 
+local transcript = require("fishmonger.transcript")
+
 local MARK = "↵"
 
 -- The blank columns Claude draws left of a reply's rows (the bullet's, on its first).
 local MARGIN = 2
-
--- How much of a transcript's end to read: transcripts grow to tens of MB.
-local TRANSCRIPT_TAIL = 512 * 1024
 
 -- Bytes either side of a join that are looked up in the reply text.
 local JOIN_CONTEXT = 20
@@ -95,14 +94,14 @@ function on_yank(buf, transcript_of)
   local last = first + #ev.regcontents - 1
   local source = vim.api.nvim_buf_get_lines(buf, first - 1, last, false)
   local info = vim.fn.getwininfo(vim.api.nvim_get_current_win())[1]
-  local transcript = transcript_of(buf)
+  local transcript_path = transcript_of(buf)
   local rows = M.unwrap(
     ev.regcontents,
     source,
     rows_after(buf, last),
     info.width - info.textoff,
     first_col,
-    transcript and recent_replies(transcript)
+    transcript_path and recent_replies(transcript_path)
   )
   write_register(ev.regname, rows, ev.regtype)
 end
@@ -139,28 +138,16 @@ function gap_at(left, right, fills, replies)
 end
 
 --- The text of the assistant replies near the end of transcript `path`, or nil
---- when it can't be read. A read that starts mid-file starts mid-line, so the
---- first line is skipped then.
+--- when it can't be read.
 function recent_replies(path)
-  local f = io.open(path, "rb")
-  if not f then
+  local blocks = transcript.recent_assistant_blocks(path)
+  if not blocks then
     return nil
   end
-  local size = f:seek("end")
-  f:seek("set", math.max(0, size - TRANSCRIPT_TAIL))
-  local lines = vim.split(f:read("*a"), "\n", { plain = true })
-  f:close()
   local texts = {}
-  for i = size > TRANSCRIPT_TAIL and 2 or 1, #lines do
-    local ok, entry = pcall(vim.json.decode, lines[i])
-    local content = ok
-      and type(entry) == "table"
-      and entry.type == "assistant"
-      and vim.tbl_get(entry, "message", "content")
-    for _, block in ipairs(type(content) == "table" and content or {}) do
-      if block.type == "text" then
-        texts[#texts + 1] = block.text
-      end
+  for _, block in ipairs(blocks) do
+    if block.type == "text" then
+      texts[#texts + 1] = block.text
     end
   end
   return table.concat(texts, "\n")
