@@ -3,17 +3,14 @@
 -- task saying what it is, how long it has run and how it went. <CR> on a line
 -- opens that task's output in a pane between the terminal and the list.
 --
--- The list is a real window, not a float, so it never covers the terminal and
--- ordinary window motions (<C-j> down from the terminal, <C-k> back) reach it.
--- It follows the terminal WINDOW: switching tabs in that window swaps the list
--- to the new tab's agent, or closes it when that agent has no tasks.
+-- The list (fishmonger/list.lua) follows the terminal WINDOW: switching tabs in
+-- that window swaps the list to the new tab's agent, or closes it when that
+-- agent has no tasks.
 
 local agent = require("fishmonger.agent")
+local list = require("fishmonger.list")
 
 local M = {}
-
--- Taller lists scroll rather than eat the terminal.
-local MAX_HEIGHT = 8
 
 -- Window variable on a list: the terminal window it belongs to.
 local LIST_OF = "fishmonger_tasks_of"
@@ -21,7 +18,7 @@ local LIST_OF = "fishmonger_tasks_of"
 local ns = vim.api.nvim_create_namespace("fishmonger_tasks")
 
 -- Defined below, in top-down order.
-local COUNTS, last_count, lists_by_terminal, open_list, task_under_cursor, render, row, first_line, status_look, elapsed, tail
+local COUNTS, last_count, open_list, task_under_cursor, render, row, first_line, status_look, elapsed, tail
 
 -- Set by setup(): where the list's inputs come from.
 ---@type { terminal_windows: fun(tab: integer): integer[], session_of: fun(buf: integer): string?, tasks_of: fun(session: string): table[], open_output: fun(path: string, below: integer), now: fun(): number, side_var: string? }
@@ -58,7 +55,7 @@ end
 --- Bring the current tabpage's lists in line with its terminals' tasks.
 function M.sync()
   local tab = vim.api.nvim_get_current_tabpage()
-  local lists = lists_by_terminal(tab)
+  local lists = list.by_terminal(tab, LIST_OF)
   for _, term_win in ipairs(env.terminal_windows(tab)) do
     local session = env.session_of(vim.api.nvim_win_get_buf(term_win))
     local tasks = session and env.tasks_of(session) or {}
@@ -117,47 +114,13 @@ function last_count(text, patterns)
   return best
 end
 
---- The task lists in `tab`, keyed by their terminal window.
-function lists_by_terminal(tab)
-  local out = {}
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-    local of = vim.w[win][LIST_OF]
-    if of then
-      out[of] = win
-    end
-  end
-  return out
-end
-
 --- A new, empty list window under `term_win`.
 function open_list(term_win)
-  local buf = vim.api.nvim_create_buf(false, true)
-  vim.bo[buf].bufhidden = "wipe"
-  vim.bo[buf].filetype = "fishmonger-tasks"
-  -- noautocmd: a layout manager places a window when a buffer enters it, by
-  -- which point the side mark must be there (as fishmonger's own panes do).
-  local placeholder = vim.api.nvim_create_buf(false, true)
-  vim.bo[placeholder].bufhidden = "wipe"
-  local win = vim.api.nvim_open_win(
-    placeholder,
-    false,
-    { split = "below", win = term_win, height = 1, noautocmd = true }
+  local win = list.open(
+    term_win,
+    { of_var = LIST_OF, filetype = "fishmonger-tasks", side_var = env.side_var }
   )
-  vim.w[win][LIST_OF] = term_win
-  if env.side_var then
-    vim.w[win][env.side_var] = vim.w[term_win][env.side_var]
-  end
-  vim.api.nvim_win_set_buf(win, buf)
-  for name, value in pairs({
-    number = false,
-    relativenumber = false,
-    signcolumn = "no",
-    winfixheight = true,
-    wrap = false,
-    winbar = "",
-  }) do
-    vim.api.nvim_set_option_value(name, value, { scope = "local", win = win })
-  end
+  local buf = vim.api.nvim_win_get_buf(win)
   vim.keymap.set("n", "<CR>", function()
     local task = task_under_cursor(win)
     if task then
@@ -180,29 +143,23 @@ function task_under_cursor(win)
   return (vim.b[buf].fishmonger_tasks or {})[row]
 end
 
---- Fill list `win` with `tasks`, resizing only when the count changes: every
---- resize also resizes the terminal above, and its program repaints.
+--- Fill list `win` with `tasks`.
 function render(win, session, tasks)
   local buf = vim.api.nvim_win_get_buf(win)
   local rows = vim.tbl_map(row, tasks)
-  local text = vim.tbl_map(function(r)
-    return r.text
-  end, rows)
-  if not vim.deep_equal(text, vim.api.nvim_buf_get_lines(buf, 0, -1, false)) then
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, text)
-  end
+  list.set_lines(
+    win,
+    vim.tbl_map(function(r)
+      return r.text
+    end, rows)
+  )
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   for i, r in ipairs(rows) do
     vim.api.nvim_buf_set_extmark(buf, ns, i - 1, 0, { end_col = #r.icon, hl_group = r.hl })
   end
   vim.b[buf].fishmonger_session = session
   vim.b[buf].fishmonger_tasks = tasks
-  local height = math.min(#tasks, MAX_HEIGHT)
-  -- A layout manager that sizes its windows itself (edgy) would undo the resize.
-  vim.w[win].fishmonger_tasks_height = height
-  if vim.api.nvim_win_get_height(win) ~= height then
-    vim.api.nvim_win_set_height(win, height)
-  end
+  list.set_height(win, #tasks, "fishmonger_tasks_height")
 end
 
 --- One task's line: `{ text, icon, hl }`.
