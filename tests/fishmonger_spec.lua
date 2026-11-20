@@ -228,6 +228,20 @@ describe("hosted buffers", function()
     assert.equals(2, open_slot(terms))
   end)
 
+  it("treats a hidden float on the buffer as nowhere, not a window to trade with", function()
+    local buf = hosted("/tmp/chat-h")
+    terms.show(1, { buf = buf })
+    terms.show(2)
+    local float = vim.api.nvim_open_win(buf, false, {
+      relative = "editor", row = 0, col = 0, width = 10, height = 5, hide = true,
+    })
+    terms.show(1)
+
+    assert.equals(1, open_slot(terms))
+    assert.equals(buf, vim.api.nvim_win_get_buf(float))
+    vim.api.nvim_win_close(float, true)
+  end)
+
   it("takes sent text at the end of its last line, typing on from there", function()
     local buf = hosted("/tmp/chat-g", { "## Me", "", "explain" })
     terms.show(2)

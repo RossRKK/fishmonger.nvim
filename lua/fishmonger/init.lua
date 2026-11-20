@@ -288,10 +288,18 @@ local function owner_of_buf(buf)
   end
 end
 
+-- A tabpage's windows on screen: a hidden float, which a plugin may keep on a
+-- buffer to hold its window state, shows nothing.
+local function shown_windows(tab)
+  return vim.tbl_filter(function(win)
+    return not vim.api.nvim_win_get_config(win).hide
+  end, vim.api.nvim_tabpage_list_wins(tab))
+end
+
 -- The windows of `tab` showing one of its terminals, in layout order.
 local function terminal_windows(state, tab)
   local out = {}
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+  for _, win in ipairs(shown_windows(tab)) do
     if slot_of_buf(vim.api.nvim_win_get_buf(win), state) then
       out[#out + 1] = win
     end
@@ -300,7 +308,7 @@ local function terminal_windows(state, tab)
 end
 
 local function window_showing(tab, buf)
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+  for _, win in ipairs(shown_windows(tab)) do
     if vim.api.nvim_win_get_buf(win) == buf then
       return win
     end
@@ -332,7 +340,7 @@ end
 -- to slot order for any never shown.
 local function hidden_term(state, tab)
   local on_screen = {}
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+  for _, win in ipairs(shown_windows(tab)) do
     on_screen[vim.api.nvim_win_get_buf(win)] = true
   end
   for _, term in ipairs(state.recent) do
@@ -389,7 +397,7 @@ local function vacate(state, tab, term)
   -- Found before leave runs, which may close windows of its own.
   local wins = vim.tbl_filter(function(win)
     return vim.api.nvim_win_get_buf(win) == term.buf
-  end, vim.api.nvim_tabpage_list_wins(tab))
+  end, shown_windows(tab))
   if #wins > 0 then
     leave(term)
   end
