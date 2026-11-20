@@ -32,14 +32,14 @@ reimplemented natively over nvim terminal buffers, spawned directly with
 
 Terminals running a coding agent can report what the agent is *doing* —
 crucially, whether it has finished or is **blocked on you**, which nothing in the
-terminal's byte stream distinguishes. `<C-b>a` opens a list of every agent across
+terminal's byte stream distinguishes. `<C-b>A` opens a list of every agent across
 every tabpage, blocked ones first, one key per row to jump to it (switch tabpage
 and surface its terminal). `fishmonger.view.items()` returns the same rows as
 data for embedding elsewhere — a dashboard, a statusline.
 
-`<C-b>A` starts a new agent in the current tabpage: fishmonger doesn't know
+`<C-b>a` starts a new agent in the current tabpage: fishmonger doesn't know
 what an agent is, so it calls `setup({ new_agent = fn(tab) })`, which might
-host a chat as a new tab (see Hosted buffers). Without one, `<C-b>A` is
+host a chat as a new tab (see Hosted buffers). Without one, `<C-b>a` is
 unbound.
 
 It's fed by the agent writing a small JSON file per session into
@@ -106,7 +106,7 @@ the buffer's file.
 
 | Function                       | Description                                         |
 | ------------------------------ | --------------------------------------------------- |
-| `setup(opts?)`                 | Initialise slot state and the side window. `opts.shell` overrides the shell command spawned in each terminal (default: `vim.o.shell`); `opts.agent` configures agent-status tracking (`{ dir, enabled }`); `opts.project_name(tab)` names a tabpage in the agent view; `opts.workspace(n)` resolves `<C-b>mN`'s workspace number to a tabpage; `opts.open_file(path, line)` opens a file from the referenced-files list; `opts.new_agent(tab)` is what `<C-b>A` does (see Agent view). |
+| `setup(opts?)`                 | Initialise slot state and the side window. `opts.shell` overrides the shell command spawned in each terminal (default: `vim.o.shell`); `opts.agent` configures agent-status tracking (`{ dir, enabled }`); `opts.project_name(tab)` names a tabpage in the agent view; `opts.workspace(n)` resolves `<C-b>mN`'s workspace number to a tabpage; `opts.open_file(path, line)` opens a file from the referenced-files list; `opts.new_agent(tab)` is what `<C-b>a` does (see Agent view). |
 | `setup_keymaps()`              | Register the `<C-b>` prefix tab keymaps.            |
 | `setup_exit()`                 | Wire terminal-exit cleanup.                          |
 | `show(slot, opts?)`            | Reveal/create the terminal in `slot` in the target window: the current terminal window, else the one used last, else the side panel. A tab already showing in another window swaps places with it. `opts.insert` controls whether focus enters insert mode; `opts.shell` starts a terminal the call creates with that command instead of the configured shell; `opts.buf` fills an empty slot with that buffer instead, with `opts.on_show(win)` / `opts.on_hide()`, `opts.session()` and `opts.title()` (see Hosted buffers). |

@@ -1173,38 +1173,71 @@ describe("panes", function()
   end)
 end)
 
-describe("<C-b>A", function()
-  local terms
+describe("<C-b>a and <C-b>A", function()
+  local terms, asked, real_view
 
   before_each(function()
     terms = fresh_terms()
+    asked = {}
+    real_view = package.loaded["fishmonger.view"]
+  end)
+
+  after_each(function()
+    package.loaded["fishmonger.view"] = real_view
   end)
 
   local function press(keys)
     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
   end
 
-  it("starts a new agent in the current tabpage through the config", function()
-    local asked = {}
+  local function setup_with_agent()
     terms.setup({
       new_agent = function(tab)
         asked[#asked + 1] = tab
       end,
     })
     terms.setup_keymaps()
+  end
+
+  local function stub_view()
+    local popups = 0
+    package.loaded["fishmonger.view"] = {
+      popup = function()
+        popups = popups + 1
+      end,
+    }
+    return function()
+      return popups
+    end
+  end
+
+  it("<C-b>a starts a new agent in the current tabpage through the config", function()
+    setup_with_agent()
+    local popups = stub_view()
     vim.cmd("tabnew")
+
+    press("<C-b>a")
+
+    assert.same({ vim.api.nvim_get_current_tabpage() }, asked)
+    assert.equals(0, popups())
+  end)
+
+  it("<C-b>A opens the agent view, not a new agent", function()
+    setup_with_agent()
+    local popups = stub_view()
 
     press("<C-b>A")
 
-    assert.same({ vim.api.nvim_get_current_tabpage() }, asked)
+    assert.equals(1, popups())
+    assert.same({}, asked)
   end)
 
-  it("opens nothing without a configured agent", function()
+  it("<C-b>a opens nothing without a configured agent", function()
     terms.setup({})
     terms.setup_keymaps()
 
-    press("<C-b>A")
-    vim.cmd("stopinsert") -- the fallen-through A appends
+    press("<C-b>a")
+    vim.cmd("stopinsert") -- the fallen-through a appends
 
     assert.same({}, slots_of(terms))
   end)

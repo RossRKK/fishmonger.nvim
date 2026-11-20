@@ -9,7 +9,7 @@
 -- workspace N (tmux move-window -t other-session; a config numbers its
 -- workspaces via setup({ workspace }), else N is the tabpage number). <C-b>" and
 -- <C-b>% split a new shell into a pane, <C-b>x kills a pane, and <C-b> arrows
--- move between panes, <C-b>f lists the files the agent referenced, and <C-b>A
+-- move between panes, <C-b>f lists the files the agent referenced, and <C-b>a
 -- starts a new agent through the config's setup({ new_agent }). <C-t>
 -- toggles the side slot.
 --
@@ -71,8 +71,8 @@ local config = {
   -- files to its own main window passes its opener.
   ---@type nil|fun(path: string, line?: integer)
   open_file = nil,
-  -- What <C-b>A does: start a new agent in tabpage `tab`, as a tab of its panel
-  -- say. Nil leaves <C-b>A unbound, so a config picks its own kind of agent.
+  -- What <C-b>a does: start a new agent in tabpage `tab`, as a tab of its panel
+  -- say. Nil leaves <C-b>a unbound, so a config picks its own kind of agent.
   ---@type nil|fun(tab: integer)
   new_agent = nil,
 }
@@ -1658,15 +1658,15 @@ function M.setup_keymaps()
       M.here()
     elseif key == "o" then
       M.cycle()
-    elseif key == "a" then
+    elseif key == "a" and config.new_agent then
+      config.new_agent(vim.api.nvim_get_current_tabpage())
+    elseif key == "A" then
       -- The agent view (lua/fishmonger/view.lua): every agent in every
       -- workspace, blocked ones first. On the prefix rather than its own ctrl
       -- key because the moment you want it is while sitting in a terminal
       -- waiting on an agent, where the free keys are the ones already routed
       -- through here.
       require("fishmonger.view").popup()
-    elseif key == "A" and config.new_agent then
-      config.new_agent(vim.api.nvim_get_current_tabpage())
     elseif key == "f" then
       M.files()
     elseif key == "r" then
