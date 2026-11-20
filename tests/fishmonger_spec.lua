@@ -149,6 +149,100 @@ describe("terms.show", function()
   end)
 end)
 
+-- A tab can hold any buffer, not only a terminal: a chat, a log.
+describe("hosted buffers", function()
+  local terms, started
+
+  --- A listed scratch buffer named `name`, its text `lines`.
+  local function hosted(name, lines)
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(buf, name)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, true, lines or { "" })
+    return buf
+  end
+
+  before_each(function()
+    terms = fresh_terms()
+    started = 0
+    vim.fn.jobstart = function(cmd, opts) ---@diagnostic disable-line: duplicate-set-field, unused-local
+      started = started + 1
+      return 1
+    end
+    terms.setup_exit()
+  end)
+
+  it("puts the buffer in the slot without starting a shell", function()
+    local buf = hosted("/tmp/chat-a")
+    terms.show(1, { buf = buf })
+
+    assert.equals(0, started)
+    assert.equals(buf, terms.slots[1].buf)
+    assert.equals(1, open_slot(terms))
+  end)
+
+  it("keeps the slot's own buffer when the slot is already taken", function()
+    terms.show(1)
+    local term = terms.slots[1]
+    terms.show(1, { buf = hosted("/tmp/chat-b") })
+
+    assert.equals(term, terms.slots[1])
+  end)
+
+  it("switches between a hosted buffer and a terminal in the same window", function()
+    local buf = hosted("/tmp/chat-c")
+    terms.show(1, { buf = buf })
+    local win = terms.win
+    terms.show(2)
+    terms.show(1)
+
+    assert.equals(win, terms.win)
+    assert.equals(buf, vim.api.nvim_win_get_buf(win))
+  end)
+
+  it("names its tab after the buffer's file", function()
+    terms.show(1, { buf = hosted("/tmp/chat-d") })
+    vim.g.statusline_winid = terms.win
+    local strip = terms.winbar()
+    vim.g.statusline_winid = nil
+
+    assert.truthy(strip:find(" 1:chat%-d "))
+  end)
+
+  it("leaves its slot when the buffer is deleted", function()
+    local buf = hosted("/tmp/chat-e")
+    terms.show(1, { buf = buf })
+    terms.show(2)
+    vim.api.nvim_buf_delete(buf, { force = true })
+
+    assert.same({ 2 }, slots_of(terms))
+  end)
+
+  it("deletes the buffer on <C-b>&, showing another tab", function()
+    terms.show(2)
+    local buf = hosted("/tmp/chat-f")
+    terms.show(1, { buf = buf })
+    terms.kill()
+
+    assert.is_false(vim.api.nvim_buf_is_valid(buf))
+    assert.same({ 2 }, slots_of(terms))
+    assert.equals(2, open_slot(terms))
+  end)
+
+  it("takes sent text at the end of its last line, typing on from there", function()
+    local buf = hosted("/tmp/chat-g", { "## Me", "", "explain" })
+    terms.show(2)
+    terms.show(1, { buf = buf })
+    terms.toggle() -- hidden: send re-shows it
+
+    assert.is_true(terms.send(" lua/a.lua:12 "))
+
+    assert.equals(1, open_slot(terms))
+    assert.same({ "## Me", "", "explain lua/a.lua:12 " }, vim.api.nvim_buf_get_lines(buf, 0, -1, true))
+    assert.equals(3, vim.api.nvim_win_get_cursor(terms.win)[1])
+    vim.cmd("stopinsert")
+  end)
+end)
+
 describe("terms.new", function()
   local terms
 

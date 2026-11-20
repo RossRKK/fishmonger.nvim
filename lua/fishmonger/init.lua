@@ -709,7 +709,8 @@ local refresh_os_title
 -- opens the side panel for it. A tab already on screen in another window trades
 -- places with what `win` shows: a terminal in two windows would have one pty
 -- sized for both. `opts.insert` (default true) lands in terminal mode;
--- `opts.shell` starts a new terminal with that command instead of config.shell.
+-- `opts.shell` starts a new terminal with that command instead of config.shell;
+-- `opts.buf` fills an empty slot with that buffer instead of a terminal.
 local function show_in(win, slot, opts)
   opts = opts or {}
   slot = clamp(slot)
@@ -718,7 +719,7 @@ local function show_in(win, slot, opts)
   local state = st(tab)
   local term = state.slots[slot]
   local have_buf = term and vim.api.nvim_buf_is_valid(term.buf)
-  local buf = have_buf and term.buf or make_term_buf()
+  local buf = have_buf and term.buf or opts.buf or make_term_buf()
 
   if not win then
     win = open_viewport(buf)
@@ -735,7 +736,9 @@ local function show_in(win, slot, opts)
   style_window(win)
   vim.api.nvim_set_current_win(win)
 
-  if not have_buf then
+  if opts.buf and not have_buf then
+    state.slots[slot] = { buf = buf }
+  elseif not have_buf then
     -- buf is on screen now, so the pty sizes to this window
     state.slots[slot] = { buf = buf, chan = start_job(buf, opts.shell) }
   end
@@ -759,7 +762,8 @@ end
 
 -- Show the terminal in `slot` in the target window (see target_window),
 -- opening the side panel when no terminal window is open. opts.tab shows it in
--- that tabpage instead, leaving focus where it is.
+-- that tabpage instead, leaving focus where it is. opts.buf hosts that buffer
+-- (a chat, a log) as the tab when the slot is empty.
 function M.show(slot, opts)
   local tab = opts and opts.tab or vim.api.nvim_get_current_tabpage()
   if tab ~= vim.api.nvim_get_current_tabpage() then
@@ -771,23 +775,41 @@ function M.show(slot, opts)
   show_in(target_window(st(tab), tab), slot, opts)
 end
 
+local append_to_prompt -- defined after its caller
+
 -- Type `text` into the current side terminal (the one <C-t> would show) and
 -- land there in terminal mode, WITHOUT a trailing newline: the text is a start
 -- on the prompt, not a submitted command, so you finish the line yourself -- a
 -- `path:line` reference followed by your comment to the agent, say. Refuses
 -- rather than spawning a shell to receive it, since text typed into a terminal
--- that has only just started races the shell's own startup.
+-- that has only just started races the shell's own startup. A hosted buffer's
+-- prompt is its last line, so the text is appended there in insert mode.
 function M.send(text)
   local state = st()
   local slot = current_slot(state)
   local term = slot and state.slots[slot]
-  if not (term and term.chan and vim.api.nvim_buf_is_valid(term.buf)) then
+  if not (term and vim.api.nvim_buf_is_valid(term.buf)) then
     vim.notify("no side terminal to send to", vim.log.levels.WARN)
     return false
   end
-  M.show(slot)
-  vim.api.nvim_chan_send(term.chan, text)
+  if term.chan then
+    M.show(slot)
+    vim.api.nvim_chan_send(term.chan, text)
+  else
+    M.show(slot, { insert = false })
+    append_to_prompt(term.buf, text)
+  end
   return true
+end
+
+-- Add `text` to the end of `buf`'s last line and type on from there in the current window.
+function append_to_prompt(buf, text)
+  local row = vim.api.nvim_buf_line_count(buf) - 1
+  local col = #vim.api.nvim_buf_get_lines(buf, row, row + 1, true)[1]
+  local lines = vim.split(text, "\n", { plain = true })
+  vim.api.nvim_buf_set_text(buf, row, col, row, col, lines)
+  vim.api.nvim_win_set_cursor(0, { row + #lines, 0 })
+  vim.cmd("startinsert!")
 end
 
 -- <C-t>: toggle the side slot — close its windows if open (buffers stay alive),
@@ -1260,9 +1282,10 @@ end
 
 -- A tab's title text: the OSC title the running program set (b:term_title —
 -- Claude Code updates this live), falling back to the foreground process name
--- from /proc, then "term". WITHOUT its leading status glyph: the strip renders
--- the status itself (see M.winbar), so the raw glyph in the title would double
--- it. Escaped because it lands in a winbar %-expression verbatim.
+-- from /proc, then a hosted buffer's file name, then "term". WITHOUT its leading
+-- status glyph: the strip renders the status itself (see M.winbar), so the raw
+-- glyph in the title would double it. Escaped because it lands in a winbar
+-- %-expression verbatim.
 local function tab_name(term)
   local name = term_title(term)
   if not name then
@@ -1272,6 +1295,10 @@ local function tab_name(term)
       local comm = read_file("/proc/" .. target .. "/comm")
       name = comm and (comm:gsub("%s+$", "")) or nil
     end
+  end
+  if not name and not term.chan then
+    local file = vim.fs.basename(vim.api.nvim_buf_get_name(term.buf))
+    name = file ~= "" and file or nil
   end
   return (truncate(strip_icon(name or "term"), 24):gsub("%%", "%%%%"))
 end
@@ -1636,6 +1663,20 @@ function M.setup_exit()
         if vim.api.nvim_buf_is_valid(args.buf) then
           pcall(vim.api.nvim_buf_delete, args.buf, { force = true })
         end
+        emit_tabs_changed(tab)
+      end)
+    end,
+  })
+  -- A hosted buffer has no shell to exit, so it leaves its slot when it is unloaded.
+  vim.api.nvim_create_autocmd("BufUnload", {
+    group = vim.api.nvim_create_augroup("FishmongerHostedExit", { clear = true }),
+    callback = function(args)
+      local state, slot, term, tab = owner_of_buf(args.buf)
+      if not slot or term.chan then
+        return
+      end
+      state.slots[slot] = nil
+      vim.schedule(function()
         emit_tabs_changed(tab)
       end)
     end,
