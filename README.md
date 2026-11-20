@@ -102,6 +102,7 @@ own filetype, so a layout manager that docks by filetype needs it listed.
 | `focus(entry)`                 | Switch to an `agents()` entry's tabpage and surface its terminal. |
 | `mark(kind)`                   | `<C-b>r` (`"read"`) / `<C-b>u` (`"unread"`): mark the current terminal's agent until its next status write. |
 | `files()`                      | `<C-b>f`: toggle the referenced-files list under the target terminal. |
+| `panel_open(tab?)`             | Whether a tabpage's side panel is on screen (what `toggle()` would close). |
 | `transfer(tab)`                | Carry the current terminal (live process, scrollback and all) into tabpage `tab`'s lowest free slot and follow it. The process's cwd does not change. |
 | `transfer_to(n)`               | `<C-b>mN`: `transfer` to workspace N — `setup({ workspace = fn(n) -> tab })`'s numbering, else the Nth tabpage. |
 | `transfer_pick()`              | `vim.ui.select` over the other tabpages by project name, then `transfer`. |

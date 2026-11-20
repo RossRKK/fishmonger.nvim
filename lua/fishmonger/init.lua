@@ -829,6 +829,11 @@ function M.toggle()
   end
 end
 
+-- Whether tabpage `tab` (default current) has its side panel on screen: what toggle() would close.
+function M.panel_open(tab)
+  return side_of(tab or vim.api.nvim_get_current_tabpage()) ~= nil
+end
+
 -- <C-b>t: a terminal in the current window, the way :edit opens a file there
 -- (<C-o> goes back). It shows the most recent tab not already on screen.
 function M.here()

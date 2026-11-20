@@ -427,6 +427,29 @@ describe("terms.toggle", function()
   end)
 end)
 
+describe("terms.panel_open", function()
+  local terms
+
+  before_each(function()
+    terms = fresh_terms()
+  end)
+
+  it("is true while the side panel shows and false once toggled away", function()
+    terms.show(1)
+    assert.is_true(terms.panel_open())
+    terms.toggle()
+    assert.is_false(terms.panel_open())
+  end)
+
+  it("answers for the tabpage asked about", function()
+    terms.show(1)
+    local with_panel = vim.api.nvim_get_current_tabpage()
+    vim.cmd("tabnew")
+    assert.is_false(terms.panel_open())
+    assert.is_true(terms.panel_open(with_panel))
+  end)
+end)
+
 -- Zoom (tmux resize-pane -Z): the current window floats over the whole tabpage.
 describe("terms.zoom", function()
   local terms
