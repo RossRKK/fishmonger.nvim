@@ -475,6 +475,13 @@ function M.dismiss(session, id)
   M.refresh()
 end
 
+--- A live session's record by its id, or nil.
+---@param session string?
+---@return table?
+function M.get(session)
+  return session and sessions[session]
+end
+
 --- Every known session, live agents only. Terminal-matching is the caller's job
 --- (see fishmonger.agents), so this stays usable for sessions running outside
 --- any managed terminal.

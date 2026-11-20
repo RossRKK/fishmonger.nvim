@@ -242,6 +242,37 @@ describe("hosted buffers", function()
     vim.api.nvim_win_close(float, true)
   end)
 
+  it("shows the agent session it names, under its own title, as a terminal's agent shows", function()
+    local agent = require("fishmonger.agent")
+    local real = agent.get
+    agent.get = function(session) ---@diagnostic disable-line: duplicate-set-field
+      return session == "s1" and { session = "s1", state = "done", colour = "red" } or nil
+    end
+    terms.show(1, {
+      buf = hosted("/tmp/chat-i"),
+      session = function()
+        return "s1"
+      end,
+      title = function()
+        return "calm-otter"
+      end,
+    })
+    vim.g.statusline_winid = terms.win
+    local strip = terms.winbar()
+    vim.g.statusline_winid = nil
+    local tab = terms.tabs()[1]
+    local listed = vim.iter(terms.agents()):find(function(entry)
+      return entry.session == "s1"
+    end)
+    agent.get = real
+
+    local done = agent.states.done.icon
+    assert.truthy(strip:find(agent.glyph_cell(done) .. "%#TabLineSel#calm-otter ", 1, true))
+    assert.equals("s1", tab.agent.session)
+    assert.equals(done, tab.icon)
+    assert.same({ 1, "calm-otter", "FishmongerAgentRed" }, { listed.slot, listed.title, listed.colour_hl })
+  end)
+
   it("takes sent text at the end of its last line, typing on from there", function()
     local buf = hosted("/tmp/chat-g", { "## Me", "", "explain" })
     terms.show(2)

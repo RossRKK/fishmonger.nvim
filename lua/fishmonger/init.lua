@@ -80,7 +80,8 @@ end
 
 -- Per-tabpage state, keyed by tabpage handle:
 --   slots  = slot (1..9) -> { buf = <bufnr>, chan = <job channel> }, or for a
---            hosted buffer { buf, on_show = fn(win)?, on_hide = fn()? }
+--            hosted buffer { buf, on_show = fn(win)?, on_hide = fn()?,
+--            session = fn() -> id?, title = fn() -> string? }
 --   recent = terms, most recently shown first; the current slot is the first
 --            one still in `slots`, so a renumber or a kill needs no bookkeeping
 local states = {}
@@ -463,10 +464,12 @@ local function term_procs(term)
   return pid, tpgid
 end
 
--- The OSC title the program in `term` set (b:term_title), or nil.
+-- The OSC title the program in `term` set (b:term_title), or the title a hosted tab gives itself.
 local function term_title(term)
   if not (term and term.buf and vim.api.nvim_buf_is_valid(term.buf)) then
     return nil
+  elseif term.title then
+    return term.title()
   end
   local ok, title = pcall(function()
     return vim.b[term.buf].term_title
@@ -494,13 +497,14 @@ local coalesce = require("fishmonger.coalesce")
 
 --- The agent status of a terminal: the record the hook wrote, plus its `look`
 --- (icon/hl/label/attention). Nil when nothing is reporting from that terminal.
+--- A hosted tab has no shell to match, so it names its session instead.
 ---@param term table?
 ---@return table?
 local function term_agent(term)
   if not (term and term.buf and vim.api.nvim_buf_is_valid(term.buf)) then
     return nil
   end
-  local record = agent.for_buf(term.buf, shell_pid)
+  local record = term.session and agent.get(term.session()) or agent.for_buf(term.buf, shell_pid)
   if not record then
     return nil
   end
@@ -748,7 +752,8 @@ local refresh_os_title
 -- sized for both. `opts.insert` (default true) lands in terminal mode;
 -- `opts.shell` starts a new terminal with that command instead of config.shell;
 -- `opts.buf` fills an empty slot with that buffer instead of a terminal, and
--- `opts.on_show(win)` / `opts.on_hide()` go with it (see arrive and leave).
+-- `opts.on_show(win)` / `opts.on_hide()` go with it (see arrive and leave), as do
+-- `opts.session()` (the agent session it shows) and `opts.title()` (its tab's name).
 local function show_in(win, slot, opts)
   opts = opts or {}
   slot = clamp(slot)
@@ -783,7 +788,13 @@ local function show_in(win, slot, opts)
   vim.api.nvim_set_current_win(win)
 
   if opts.buf and not have_buf then
-    state.slots[slot] = { buf = buf, on_show = opts.on_show, on_hide = opts.on_hide }
+    state.slots[slot] = {
+      buf = buf,
+      on_show = opts.on_show,
+      on_hide = opts.on_hide,
+      session = opts.session,
+      title = opts.title,
+    }
   elseif not have_buf then
     -- buf is on screen now, so the pty sizes to this window
     state.slots[slot] = { buf = buf, chan = start_job(buf, opts.shell) }
@@ -810,7 +821,8 @@ end
 -- Show the terminal in `slot` in the target window (see target_window),
 -- opening the side panel when no terminal window is open. opts.tab shows it in
 -- that tabpage instead, leaving focus where it is. opts.buf hosts that buffer
--- (a chat, a log) as the tab when the slot is empty, with opts.on_show/on_hide.
+-- (a chat, a log) as the tab when the slot is empty, with opts.on_show/on_hide
+-- and opts.session/title.
 function M.show(slot, opts)
   local tab = opts and opts.tab or vim.api.nvim_get_current_tabpage()
   if tab ~= vim.api.nvim_get_current_tabpage() then
@@ -1338,8 +1350,8 @@ local function truncate(s, n)
 end
 
 -- A tab's title text: the OSC title the running program set (b:term_title —
--- Claude Code updates this live), falling back to the foreground process name
--- from /proc, then a hosted buffer's file name, then "term". WITHOUT its leading
+-- Claude Code updates this live) or a hosted tab's own title, falling back to the
+-- foreground process name from /proc, then a hosted buffer's file name, then "term". WITHOUT its leading
 -- status glyph: the strip renders the status itself (see M.winbar), so the raw
 -- glyph in the title would double it. Escaped because it lands in a winbar
 -- %-expression verbatim.
