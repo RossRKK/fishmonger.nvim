@@ -79,7 +79,8 @@ local function want_width()
 end
 
 -- Per-tabpage state, keyed by tabpage handle:
---   slots  = slot (1..9) -> { buf = <bufnr>, chan = <job channel> }
+--   slots  = slot (1..9) -> { buf = <bufnr>, chan = <job channel> }, or for a
+--            hosted buffer { buf, on_show = fn(win)?, on_hide = fn()? }
 --   recent = terms, most recently shown first; the current slot is the first
 --            one still in `slots`, so a renumber or a kill needs no bookkeeping
 local states = {}
@@ -128,6 +129,20 @@ local function current_slot(state)
     if slot then
       return slot
     end
+  end
+end
+
+-- A hosted tab that builds windows of its own around its buffer is told when
+-- that buffer enters a window, and before it leaves one or the window closes.
+local function arrive(term, win)
+  if term and term.on_show then
+    term.on_show(win)
+  end
+end
+
+local function leave(term)
+  if term and term.on_hide then
+    term.on_hide()
   end
 end
 
@@ -366,25 +381,31 @@ local function fall_back(win, state)
   end
 end
 
--- Every window of `tab` showing `buf`, which has just left the tabpage's slots,
+-- Every window of `tab` showing `term`, which has just left the tabpage's slots,
 -- takes another hidden terminal (tmux kill-window), or falls back without one.
 -- Only the current window's replacement becomes the current tab, so a terminal
 -- dying elsewhere doesn't move where <C-b> goes.
-local function vacate(state, tab, buf)
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-    if vim.api.nvim_win_get_buf(win) == buf then
-      local nxt = hidden_term(state, tab)
-      if not nxt then
-        fall_back(win, state)
-      else
-        vim.api.nvim_win_set_buf(win, nxt.buf)
-        style_window(win)
-        if win == vim.api.nvim_get_current_win() then
-          touch(state, nxt)
-          vim.schedule(function()
-            vim.cmd("startinsert")
-          end)
-        end
+local function vacate(state, tab, term)
+  -- Found before leave runs, which may close windows of its own.
+  local wins = vim.tbl_filter(function(win)
+    return vim.api.nvim_win_get_buf(win) == term.buf
+  end, vim.api.nvim_tabpage_list_wins(tab))
+  if #wins > 0 then
+    leave(term)
+  end
+  for _, win in ipairs(wins) do
+    local nxt = hidden_term(state, tab)
+    if not nxt then
+      fall_back(win, state)
+    else
+      vim.api.nvim_win_set_buf(win, nxt.buf)
+      style_window(win)
+      arrive(nxt, win)
+      if win == vim.api.nvim_get_current_win() then
+        touch(state, nxt)
+        vim.schedule(function()
+          vim.cmd("startinsert")
+        end)
       end
     end
   end
@@ -710,7 +731,8 @@ local refresh_os_title
 -- places with what `win` shows: a terminal in two windows would have one pty
 -- sized for both. `opts.insert` (default true) lands in terminal mode;
 -- `opts.shell` starts a new terminal with that command instead of config.shell;
--- `opts.buf` fills an empty slot with that buffer instead of a terminal.
+-- `opts.buf` fills an empty slot with that buffer instead of a terminal, and
+-- `opts.on_show(win)` / `opts.on_hide()` go with it (see arrive and leave).
 local function show_in(win, slot, opts)
   opts = opts or {}
   slot = clamp(slot)
@@ -727,23 +749,32 @@ local function show_in(win, slot, opts)
     -- Same window, same size: a plain tab switch sends the pty no SIGWINCH.
     local elsewhere = have_buf and window_showing(tab, buf)
     local _, mine = slot_of_buf(vim.api.nvim_win_get_buf(win), state)
+    local swap = elsewhere and elsewhere ~= win and mine
+    if mine ~= term then
+      leave(mine)
+    end
+    if swap then
+      leave(term)
+    end
     vim.api.nvim_win_set_buf(win, buf)
-    if elsewhere and elsewhere ~= win and mine then
+    if swap then
       vim.api.nvim_win_set_buf(elsewhere, mine.buf)
       style_window(elsewhere)
+      arrive(mine, elsewhere)
     end
   end
   style_window(win)
   vim.api.nvim_set_current_win(win)
 
   if opts.buf and not have_buf then
-    state.slots[slot] = { buf = buf }
+    state.slots[slot] = { buf = buf, on_show = opts.on_show, on_hide = opts.on_hide }
   elseif not have_buf then
     -- buf is on screen now, so the pty sizes to this window
     state.slots[slot] = { buf = buf, chan = start_job(buf, opts.shell) }
   end
 
   touch(state, state.slots[slot])
+  arrive(state.slots[slot], win)
   vim.schedule(function()
     -- Re-assert the winbars: an adopting layout manager (edgy) blanks them
     -- synchronously on the buffer swap above, so restore them after that settles.
@@ -763,7 +794,7 @@ end
 -- Show the terminal in `slot` in the target window (see target_window),
 -- opening the side panel when no terminal window is open. opts.tab shows it in
 -- that tabpage instead, leaving focus where it is. opts.buf hosts that buffer
--- (a chat, a log) as the tab when the slot is empty.
+-- (a chat, a log) as the tab when the slot is empty, with opts.on_show/on_hide.
 function M.show(slot, opts)
   local tab = opts and opts.tab or vim.api.nvim_get_current_tabpage()
   if tab ~= vim.api.nvim_get_current_tabpage() then
@@ -818,7 +849,9 @@ function M.toggle()
   local tab = vim.api.nvim_get_current_tabpage()
   local wins = side_windows(tab)
   if #wins > 0 then
+    local state = st(tab)
     for _, win in ipairs(wins) do
+      leave(select(2, slot_of_buf(vim.api.nvim_win_get_buf(win), state)))
       pcall(vim.api.nvim_win_close, win, false)
     end
     return
@@ -989,7 +1022,7 @@ function M.kill_pane()
   end
   state.slots[slot] = nil
   if not pcall(vim.api.nvim_win_close, win, true) then
-    vacate(state, tab, term.buf)
+    vacate(state, tab, term)
   end
   shutdown(term)
   emit_tabs_changed()
@@ -1130,6 +1163,7 @@ function M.maximise()
   local cur = vim.api.nvim_get_current_win()
   local cur_slot = slot_of_buf(vim.api.nvim_win_get_buf(cur), state)
   if cur_slot and not vim.w[cur][SIDE] then
+    leave(state.slots[cur_slot])
     fall_back(cur, state)
     show_in(side_of(tab), cur_slot)
     return
@@ -1141,6 +1175,7 @@ function M.maximise()
     return
   end
   for _, win in ipairs(side_windows(tab)) do
+    leave(select(2, slot_of_buf(vim.api.nvim_win_get_buf(win), state)))
     pcall(vim.api.nvim_win_close, win, false)
   end
   show_in(main, slot)
@@ -1159,7 +1194,7 @@ function M.kill()
     return
   end
   state.slots[slot] = nil
-  vacate(state, vim.api.nvim_get_current_tabpage(), term.buf)
+  vacate(state, vim.api.nvim_get_current_tabpage(), term)
   shutdown(term)
   emit_tabs_changed()
 end
@@ -1220,7 +1255,7 @@ function M.transfer(dest)
   -- window never shows a non-terminal buffer for an adopting layout manager to
   -- eject.
   source.slots[slot] = nil
-  vacate(source, source_tab, term.buf)
+  vacate(source, source_tab, term)
   emit_tabs_changed(source_tab)
 
   target.slots[free] = term
@@ -1655,7 +1690,7 @@ function M.setup_exit()
   vim.api.nvim_create_autocmd("TermClose", {
     group = vim.api.nvim_create_augroup("TermExit", { clear = true }),
     callback = function(args)
-      local state, slot, _, tab = owner_of_buf(args.buf)
+      local state, slot, term, tab = owner_of_buf(args.buf)
       if not state or not slot then
         return
       end
@@ -1663,7 +1698,7 @@ function M.setup_exit()
       agent.forget(args.buf) -- its cached shell pid is about to be reused by someone else
       vim.schedule(function()
         if vim.api.nvim_tabpage_is_valid(tab) then
-          vacate(state, tab, args.buf)
+          vacate(state, tab, term)
         end
         -- Clean up the dead buffer ("[Process exited]").
         if vim.api.nvim_buf_is_valid(args.buf) then

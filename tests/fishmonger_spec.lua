@@ -243,6 +243,127 @@ describe("hosted buffers", function()
   end)
 end)
 
+-- A hosted tab can build windows around its buffer, as a chat does its prompt,
+-- and must take them down before its buffer leaves a window.
+describe("hosted tabs with on_show and on_hide", function()
+  local terms, events
+
+  --- A hosted buffer that splits a prompt window under the window it is shown
+  --- in and closes it on hide, as a chat does. Its hooks log `name`, the window
+  --- it arrived in, and whether its buffer was still in the window it is leaving.
+  local function self_building(name)
+    local buf = vim.api.nvim_create_buf(false, true)
+    local shown_in, prompt
+    return {
+      buf = buf,
+      on_show = function(win)
+        shown_in = win
+        if not (prompt and vim.api.nvim_win_is_valid(prompt)) then
+          prompt = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), false, { split = "below", win = win })
+        end
+        events[#events + 1] = { name, "show", win }
+      end,
+      on_hide = function()
+        local still_there = vim.api.nvim_win_is_valid(shown_in) and vim.api.nvim_win_get_buf(shown_in) == buf
+        if prompt and vim.api.nvim_win_is_valid(prompt) then
+          vim.api.nvim_win_close(prompt, true)
+        end
+        events[#events + 1] = { name, "hide", still_there }
+      end,
+    }
+  end
+
+  before_each(function()
+    terms = fresh_terms()
+    events = {}
+    terms.setup_exit()
+  end)
+
+  it("is told the window its buffer is shown in, each time it is shown", function()
+    terms.show(1, self_building("chat"))
+    local win = terms.win
+    terms.show(1)
+
+    assert.same({ { "chat", "show", win }, { "chat", "show", win } }, events)
+  end)
+
+  it("is told before another tab's buffer takes its window, and again on coming back", function()
+    terms.show(1, self_building("chat"))
+    local win = terms.win
+    terms.show(2)
+    terms.show(1)
+
+    assert.same({
+      { "chat", "show", win },
+      { "chat", "hide", true },
+      { "chat", "show", win },
+    }, events)
+  end)
+
+  it("is told before the panel closes, and shown again when it reopens", function()
+    terms.show(1, self_building("chat"))
+    terms.toggle()
+    assert.same({ "chat", "hide", true }, events[2])
+
+    terms.toggle()
+    assert.same({ "chat", "show", terms.win }, events[3])
+  end)
+
+  it("is told before <C-b>& kills it", function()
+    terms.show(2)
+    terms.show(1, self_building("chat"))
+    terms.kill()
+
+    assert.same({ "chat", "hide", true }, events[2])
+  end)
+
+  it("is told when moving to another tabpage, and shown in that one's panel", function()
+    local source = vim.api.nvim_get_current_tabpage()
+    vim.cmd("tabnew")
+    local dest = vim.api.nvim_get_current_tabpage()
+    vim.api.nvim_set_current_tabpage(source)
+    terms.show(1, self_building("chat"))
+    terms.transfer(dest)
+
+    assert.same({ "chat", "hide", true }, events[2])
+    assert.same({ "chat", "show", terms.win }, events[3])
+    assert.equals(dest, vim.api.nvim_win_get_tabpage(events[3][3]))
+  end)
+
+  it("is told on <C-b>Z, moving into the main window", function()
+    vim.o.columns = 200 -- headless is 80 wide: the panel would be the widest window
+    local main = vim.api.nvim_get_current_win()
+    terms.show(1, self_building("chat"))
+    terms.maximise()
+
+    assert.same({ "chat", "hide", true }, events[2])
+    assert.same({ "chat", "show", main }, events[3])
+  end)
+
+  it("is told when it trades windows with the tab shown in the other", function()
+    local editor = vim.api.nvim_get_current_win()
+    terms.show(1, self_building("chat"))
+    local panel = terms.win
+    vim.api.nvim_set_current_win(editor)
+    terms.here() -- slot 2 in the editor window
+    terms.show(1)
+
+    assert.same({ "chat", "hide", true }, events[2])
+    assert.same({ "chat", "show", editor }, events[3])
+    assert.equals(2, open_slot(terms))
+    assert.equals(panel, terms.win)
+  end)
+
+  it("is told when it surfaces after the tab on screen is killed", function()
+    terms.show(1, self_building("chat"))
+    local win = terms.win
+    terms.show(2)
+    terms.kill()
+
+    assert.same({ "chat", "show", win }, events[#events])
+  end)
+end)
+
 describe("terms.new", function()
   local terms
 
