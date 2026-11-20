@@ -9,7 +9,8 @@
 -- workspace N (tmux move-window -t other-session; a config numbers its
 -- workspaces via setup({ workspace }), else N is the tabpage number). <C-b>" and
 -- <C-b>% split a new shell into a pane, <C-b>x kills a pane, and <C-b> arrows
--- move between panes, and <C-b>f lists the files the agent referenced. <C-t>
+-- move between panes, <C-b>f lists the files the agent referenced, and <C-b>A
+-- starts a new agent through the config's setup({ new_agent }). <C-t>
 -- toggles the side slot.
 --
 -- Model (the tmux-pane model): the side panel (M.win) lives in the right slot,
@@ -70,6 +71,10 @@ local config = {
   -- files to its own main window passes its opener.
   ---@type nil|fun(path: string, line?: integer)
   open_file = nil,
+  -- What <C-b>A does: start a new agent in tabpage `tab`, as a tab of its panel
+  -- say. Nil leaves <C-b>A unbound, so a config picks its own kind of agent.
+  ---@type nil|fun(tab: integer)
+  new_agent = nil,
 }
 
 -- Resolve the configured width to a column count.
@@ -1660,6 +1665,8 @@ function M.setup_keymaps()
       -- waiting on an agent, where the free keys are the ones already routed
       -- through here.
       require("fishmonger.view").popup()
+    elseif key == "A" and config.new_agent then
+      config.new_agent(vim.api.nvim_get_current_tabpage())
     elseif key == "f" then
       M.files()
     elseif key == "r" then
@@ -1705,7 +1712,7 @@ function M.setup_keymaps()
     "<C-b>",
     tab_prefix,
     {
-      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / Z maximise / & kill / . move / mN to workspace / a agents / f referenced files / r mark read / u mark unread)',
+      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / Z maximise / & kill / . move / mN to workspace / a agents / A new agent / f referenced files / r mark read / u mark unread)',
     }
   )
 end

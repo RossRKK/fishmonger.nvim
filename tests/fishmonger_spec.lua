@@ -1173,6 +1173,43 @@ describe("panes", function()
   end)
 end)
 
+describe("<C-b>A", function()
+  local terms
+
+  before_each(function()
+    terms = fresh_terms()
+  end)
+
+  local function press(keys)
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "x", false)
+  end
+
+  it("starts a new agent in the current tabpage through the config", function()
+    local asked = {}
+    terms.setup({
+      new_agent = function(tab)
+        asked[#asked + 1] = tab
+      end,
+    })
+    terms.setup_keymaps()
+    vim.cmd("tabnew")
+
+    press("<C-b>A")
+
+    assert.same({ vim.api.nvim_get_current_tabpage() }, asked)
+  end)
+
+  it("opens nothing without a configured agent", function()
+    terms.setup({})
+    terms.setup_keymaps()
+
+    press("<C-b>A")
+    vim.cmd("stopinsert") -- the fallen-through A appends
+
+    assert.same({}, slots_of(terms))
+  end)
+end)
+
 describe("terms.send", function()
   local terms, sent, real_chan_send
 
