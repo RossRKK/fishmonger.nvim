@@ -1004,14 +1004,15 @@ function M.select(direction)
   end
 end
 
--- <C-b>c: open the lowest unused slot.
-function M.new()
+-- <C-b>c: open the lowest unused slot, with M.show's `opts`. False when all are taken.
+function M.new(opts)
   local slot = free_slot(st())
   if slot then
-    M.show(slot)
-    return
+    M.show(slot, opts)
+    return true
   end
   vim.notify("all " .. MAX .. " terminal slots in use", vim.log.levels.WARN)
+  return false
 end
 
 -- Zoomed windows, keyed by handle: the placeholder holding the window's place

@@ -258,6 +258,13 @@ describe("terms.new", function()
     assert.equals(2, terms.current)
   end)
 
+  it("hosts a buffer it is given in the lowest free slot", function()
+    terms.show(1)
+    local buf = vim.api.nvim_create_buf(false, true)
+    assert.is_true(terms.new({ buf = buf }))
+    assert.equals(buf, terms.slots[2].buf)
+  end)
+
   it("fills a hole left by a closed terminal", function()
     terms.show(1)
     terms.show(2)
