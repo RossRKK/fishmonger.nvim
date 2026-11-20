@@ -364,6 +364,33 @@ describe("hosted tabs with on_show and on_hide", function()
   end)
 end)
 
+describe("terms.dir", function()
+  local terms
+
+  before_each(function()
+    terms = fresh_terms()
+  end)
+
+  after_each(function()
+    pcall(vim.cmd, "tabonly")
+  end)
+
+  it("is the tabpage's own directory, not the focused window's", function()
+    local root = vim.fn.getcwd()
+    vim.cmd("tabnew")
+    local tab = vim.api.nvim_get_current_tabpage()
+    vim.cmd.tcd(vim.fn.fnameescape(vim.fn.tempname():match("^(.*)/")))
+    local tab_dir = vim.fn.getcwd()
+    vim.cmd("vsplit")
+    vim.cmd.lcd(vim.fn.fnameescape(root))
+
+    assert.are_not.equal(root, tab_dir)
+    assert.equals(tab_dir, terms.dir())
+    vim.cmd("tabfirst")
+    assert.equals(tab_dir, terms.dir(tab))
+  end)
+end)
+
 describe("terms.new", function()
   local terms
 

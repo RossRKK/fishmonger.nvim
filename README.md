@@ -87,6 +87,8 @@ its prompt under the messages: `show(slot, { buf = bufnr, on_show = fn(win),
 on_hide = fn() })`. `on_show` runs each time the buffer is shown, with the
 window it is in. `on_hide` runs before the buffer leaves that window: another
 tab takes it, the panel closes, the tab is killed or moves to another tabpage.
+`dir(tab)` is the directory such a tab should start in: the tabpage's own cwd,
+whichever of its windows has focus.
 
 ## API
 
@@ -109,6 +111,7 @@ tab takes it, the panel closes, the tab is killed or moves to another tabpage.
 | `mark(kind)`                   | `<C-b>r` (`"read"`) / `<C-b>u` (`"unread"`): mark the current terminal's agent until its next status write. |
 | `files()`                      | `<C-b>f`: toggle the referenced-files list under the target terminal. |
 | `panel_open(tab?)`             | Whether a tabpage's side panel is on screen (what `toggle()` would close). |
+| `dir(tab?)`                    | The directory a tabpage works in: its tab-local cwd, not the focused window's. |
 | `transfer(tab)`                | Carry the current terminal (live process, scrollback and all) into tabpage `tab`'s lowest free slot and follow it. The process's cwd does not change. |
 | `transfer_to(n)`               | `<C-b>mN`: `transfer` to workspace N — `setup({ workspace = fn(n) -> tab })`'s numbering, else the Nth tabpage. |
 | `transfer_pick()`              | `vim.ui.select` over the other tabpages by project name, then `transfer`. |

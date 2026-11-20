@@ -668,7 +668,15 @@ function M.project_name(tab)
   if config.project_name then
     return config.project_name(tab)
   end
-  return vim.fn.fnamemodify(vim.fn.getcwd(-1, vim.api.nvim_tabpage_get_number(tab)), ":t")
+  return vim.fn.fnamemodify(M.dir(tab), ":t")
+end
+
+--- The directory tabpage `tab` (default current) works in: its tab-local cwd,
+--- whichever of its windows has focus, so a window's :lcd doesn't decide it.
+---@param tab? integer
+---@return string
+function M.dir(tab)
+  return vim.fn.getcwd(-1, vim.api.nvim_tabpage_get_number(tab or vim.api.nvim_get_current_tabpage()))
 end
 
 --- Focus an agent: switch to its tabpage and bring its terminal into the side
