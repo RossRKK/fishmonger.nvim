@@ -1223,6 +1223,10 @@ function M.maximise()
   local tab = vim.api.nvim_get_current_tabpage()
   local state = st(tab)
   local cur = vim.api.nvim_get_current_win()
+  -- A zoomed window's placeholder is no place to move a tab into.
+  if zooms[cur] then
+    unzoom(cur)
+  end
   local host = host_window(state, tab, cur)
   local cur_slot = host and slot_of_buf(vim.api.nvim_win_get_buf(host), state)
   if cur_slot and not vim.w[host][SIDE] then

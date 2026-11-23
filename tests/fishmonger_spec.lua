@@ -410,6 +410,17 @@ describe("hosted tabs with on_show and on_hide", function()
     assert.are_not.equal(main, terms.win)
   end)
 
+  it("moves into the main window on <C-b>Z while zoomed", function()
+    vim.o.columns = 200
+    local main = vim.api.nvim_get_current_win()
+    terms.show(1, self_building("chat"))
+    terms.zoom()
+    terms.maximise()
+
+    assert.same({ "chat", "show", main }, events[#events])
+    assert.is_nil(terms.win)
+  end)
+
   it("is told when it trades windows with the tab shown in the other", function()
     local editor = vim.api.nvim_get_current_win()
     terms.show(1, self_building("chat"))
