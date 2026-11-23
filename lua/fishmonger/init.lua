@@ -1108,8 +1108,11 @@ function M.new(opts)
 end
 
 -- Zoomed windows, keyed by handle: the placeholder holding the window's place
--- in the layout while it floats, the sizes to put back, and its own winhighlight.
+-- in the layout while it floats, the sizes to put back and the screen they fit,
+-- and its own winhighlight.
 local zooms = {}
+
+local fit_to_screen -- defined after its callers
 
 -- The editor minus the tabline and statusline/cmdline; zindex under the default
 -- 50 so popups (lazygit, the agent view) still land on top.
@@ -1136,6 +1139,7 @@ local function zoom(win)
   zooms[win] = {
     placeholder = vim.api.nvim_open_win(buf, false, { split = "right", win = win }),
     sizes = sizes,
+    screen = { vim.o.columns, vim.o.lines },
     winhighlight = vim.wo[win].winhighlight,
   }
   vim.api.nvim_win_set_config(win, zoom_config())
@@ -1151,7 +1155,11 @@ local function unzoom(win)
   else
     vim.api.nvim_win_set_config(win, { split = "right", win = -1 }) -- someone closed it
   end
-  vim.cmd(z.sizes)
+  if vim.deep_equal(z.screen, { vim.o.columns, vim.o.lines }) then
+    vim.cmd(z.sizes)
+  else
+    fit_to_screen()
+  end
   vim.wo[win].winhighlight = z.winhighlight
 end
 
@@ -1165,6 +1173,22 @@ function M.zoom()
     zoom(win)
   end
   vim.api.nvim_set_current_win(win)
+end
+
+-- Every tabpage's docked side panel at the configured width, and every zoomed window over the screen.
+function fit_to_screen()
+  local width = want_width()
+  for tab in pairs(states) do
+    local win = vim.api.nvim_tabpage_is_valid(tab) and side_of(tab)
+    if win and not zooms[win] then
+      pcall(vim.api.nvim_win_set_width, win, width)
+    end
+  end
+  for win in pairs(zooms) do
+    if vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_win_set_config(win, zoom_config())
+    end
+  end
 end
 
 -- The tabpage's editor area: its widest docked window outside the side panel,
@@ -1581,23 +1605,7 @@ function M.setup(opts)
   -- Every tabpage's side window is resized, not just the visible one: an unseen
   -- tabpage's window keeps its old width otherwise, and you'd only find out on
   -- switching to it.
-  vim.api.nvim_create_autocmd("VimResized", {
-    group = grp,
-    callback = function()
-      local width = want_width()
-      for tab in pairs(states) do
-        local win = vim.api.nvim_tabpage_is_valid(tab) and side_of(tab)
-        if win and not zooms[win] then
-          pcall(vim.api.nvim_win_set_width, win, width)
-        end
-      end
-      for win in pairs(zooms) do
-        if vim.api.nvim_win_is_valid(win) then
-          vim.api.nvim_win_set_config(win, zoom_config())
-        end
-      end
-    end,
-  })
+  vim.api.nvim_create_autocmd("VimResized", { group = grp, callback = fit_to_screen })
   -- Entering a terminal window makes its tab the current one, which is what
   -- sends <C-b> from the editor back to the window you were last in.
   vim.api.nvim_create_autocmd("WinEnter", {

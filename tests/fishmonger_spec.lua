@@ -747,6 +747,17 @@ describe("terms.zoom", function()
     assert.is_false(zoomed()) -- the side panel stays docked
   end)
 
+  it("docks the side panel back at the width of the screen it unzooms on", function()
+    vim.o.columns = 240
+    terms.show(1)
+    terms.zoom()
+    vim.o.columns = 200
+    vim.api.nvim_exec_autocmds("VimResized", {})
+    terms.zoom()
+
+    assert.equals(80, vim.api.nvim_win_get_width(terms.win))
+  end)
+
   it("puts a window back where it was in the layout, at its old size", function()
     vim.o.columns = 200 -- headless is 80 wide: the side panel alone would fill it
     local left = vim.api.nvim_get_current_win()
