@@ -89,6 +89,7 @@ end
 --            windows = fn() -> win[]?, session = fn() -> id?, title = fn() -> string? }
 --   recent = terms, most recently shown first; the current slot is the first
 --            one still in `slots`, so a renumber or a kill needs no bookkeeping
+--   width  = the panel width chosen by hand, or nil to follow config.width
 local states = {}
 
 -- Window variable marking the side panel. A layout manager (edgy) filters on it
@@ -164,6 +165,20 @@ local function side_of(tab)
   return side_windows(tab)[1]
 end
 
+-- A tabpage's side window in the layout, which sets the column's width; nil when the panel is closed or zoomed.
+local function docked_side(tab)
+  for _, win in ipairs(side_windows(tab)) do
+    if vim.api.nvim_win_get_config(win).relative == "" then
+      return win
+    end
+  end
+end
+
+-- The width a tabpage's panel is kept at: the one chosen by hand, else the configured one.
+local function panel_width(state)
+  return state.width or want_width()
+end
+
 local function viewport()
   return side_of(vim.api.nvim_get_current_tabpage())
 end
@@ -203,19 +218,17 @@ local function style_window(win)
   apply_winbar(win)
 end
 
--- Open the shared side window at the far right carrying `buf`, sized to the
--- configured width and pinned with winfixwidth so it holds. An external layout
--- manager (edgy, filtering on config.filetype) may still adopt and re-govern it;
--- fishmonger's own width is the standalone default. Called only when no side
--- window exists (first open, or after <C-t> closed it) -- never on a plain tab
--- switch, which is the whole point.
-local function open_viewport(buf)
+-- Open the shared side window at the far right carrying `buf`, at `width` and
+-- pinned with winfixwidth so it holds. Called only when no side window exists
+-- (first open, or after <C-t> closed it) -- never on a plain tab switch, which
+-- is the whole point.
+local function open_viewport(buf, width)
   vim.cmd("botright vsplit")
   local win = vim.api.nvim_get_current_win()
   vim.w[win][SIDE] = true -- before the buffer, which is what edgy reacts to
   vim.api.nvim_win_set_buf(win, buf)
   style_window(win)
-  pcall(vim.api.nvim_win_set_width, win, want_width())
+  pcall(vim.api.nvim_win_set_width, win, width)
   vim.wo[win].winfixwidth = true
   return win
 end
@@ -790,7 +803,7 @@ local function show_in(win, slot, opts)
   local buf = have_buf and term.buf or opts.buf or make_term_buf()
 
   if not win then
-    win = open_viewport(buf)
+    win = open_viewport(buf, panel_width(state))
   else
     -- Same window, same size: a plain tab switch sends the pty no SIGWINCH.
     local elsewhere = have_buf and window_showing(tab, buf)
@@ -1175,19 +1188,71 @@ function M.zoom()
   vim.api.nvim_set_current_win(win)
 end
 
--- Every tabpage's docked side panel at the configured width, and every zoomed window over the screen.
+-- Every tabpage's docked side panel at its width, and every zoomed window over the screen.
 function fit_to_screen()
-  local width = want_width()
-  for tab in pairs(states) do
-    local win = vim.api.nvim_tabpage_is_valid(tab) and side_of(tab)
-    if win and not zooms[win] then
-      pcall(vim.api.nvim_win_set_width, win, width)
+  for tab, state in pairs(states) do
+    local win = vim.api.nvim_tabpage_is_valid(tab) and docked_side(tab)
+    if win then
+      pcall(vim.api.nvim_win_set_width, win, panel_width(state))
     end
   end
   for win in pairs(zooms) do
     if vim.api.nvim_win_is_valid(win) then
       vim.api.nvim_win_set_config(win, zoom_config())
     end
+  end
+end
+
+-- Whether `win` is part of tabpage `tab`'s docked side panel: one of its
+-- windows, or one a hosted tab shown there built.
+local function in_panel(state, tab, win)
+  local host = host_window(state, tab, win) or win
+  return vim.w[host][SIDE] and vim.api.nvim_win_get_config(win).relative == "" or false
+end
+
+-- A panel resized from outside fishmonger (a drag, :vertical resize) keeps that width.
+local function keep_width()
+  local tab = vim.api.nvim_get_current_tabpage()
+  local state = states[tab]
+  local win = state and docked_side(tab)
+  if win and vim.api.nvim_win_get_width(win) ~= panel_width(state) then
+    state.width = vim.api.nvim_win_get_width(win)
+  end
+end
+
+--- <C-Left>/<C-Right> and <C-Up>/<C-Down> in the side panel: widen the
+--- panel's column by `delta`, or heighten the panel window the cursor is in.
+--- False, changing nothing, when the current window is not in the panel.
+---@param dim "width"|"height"
+---@param delta integer
+---@return boolean
+function M.resize(dim, delta)
+  local tab = vim.api.nvim_get_current_tabpage()
+  local state = st(tab)
+  local win = vim.api.nvim_get_current_win()
+  if not in_panel(state, tab, win) then
+    return false
+  end
+  if dim == "width" then
+    local panel = docked_side(tab)
+    vim.api.nvim_win_set_width(panel, vim.api.nvim_win_get_width(panel) + delta)
+    state.width = vim.api.nvim_win_get_width(panel)
+  else
+    vim.api.nvim_win_set_height(win, vim.api.nvim_win_get_height(win) + delta)
+  end
+  return true
+end
+
+--- Put tabpage `tab`'s (default current) panel back to the configured width,
+--- following the screen again.
+---@param tab? integer
+function M.reset_width(tab)
+  tab = tab or vim.api.nvim_get_current_tabpage()
+  local state = st(tab)
+  state.width = nil
+  local win = docked_side(tab)
+  if win then
+    vim.api.nvim_win_set_width(win, panel_width(state))
   end
 end
 
@@ -1606,6 +1671,7 @@ function M.setup(opts)
   -- tabpage's window keeps its old width otherwise, and you'd only find out on
   -- switching to it.
   vim.api.nvim_create_autocmd("VimResized", { group = grp, callback = fit_to_screen })
+  vim.api.nvim_create_autocmd("WinResized", { group = grp, callback = keep_width })
   -- Entering a terminal window makes its tab the current one, which is what
   -- sends <C-b> from the editor back to the window you were last in.
   vim.api.nvim_create_autocmd("WinEnter", {
@@ -1675,6 +1741,19 @@ end
 function M.setup_keymaps()
   -- Normal mode only: programs in the terminal own their ctrl keys.
   vim.keymap.set("n", "<C-t>", M.toggle, { desc = "Toggle side terminal" })
+  -- Ctrl+arrows size the panel from inside it; elsewhere they keep their builtin meaning.
+  for lhs, step in pairs({
+    ["<C-Right>"] = { "width", 2 },
+    ["<C-Left>"] = { "width", -2 },
+    ["<C-Up>"] = { "height", 2 },
+    ["<C-Down>"] = { "height", -2 },
+  }) do
+    vim.keymap.set("n", lhs, function()
+      if not M.resize(step[1], step[2]) then
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(lhs, true, false, true), "n", false)
+      end
+    end, { desc = "Side panel: resize from inside it" })
+  end
   -- <C-b> as a single tmux-style prefix, bound globally in normal + terminal
   -- mode. A single complete mapping fires immediately, then getcharstr() blocks
   -- for the follow-up key. Separate <C-b>1.. maps instead race the mapping

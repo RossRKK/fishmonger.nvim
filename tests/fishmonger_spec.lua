@@ -968,6 +968,98 @@ end)
 
 -- Maximise: the side terminal takes over the main window, the panel closes;
 -- unlike zoom it is a real layout change, so other windows (a file tree) stay.
+describe("the side panel's size", function()
+  local terms, editor
+
+  local function width()
+    return vim.api.nvim_win_get_width(terms.win)
+  end
+
+  --- Press `keys` in normal mode, mappings applied.
+  local function press(keys)
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "mx", false)
+  end
+
+  --- The screen resized to `columns`, as a terminal emulator does it.
+  local function resize(columns)
+    vim.o.columns = columns
+    vim.api.nvim_exec_autocmds("VimResized", {})
+  end
+
+  before_each(function()
+    terms = fresh_terms()
+    vim.o.columns = 200
+    terms.setup({
+      width = function()
+        return math.floor(vim.o.columns * 0.4)
+      end,
+    })
+    terms.setup_keymaps()
+    editor = vim.api.nvim_get_current_win()
+    terms.show(1, { insert = false })
+    vim.cmd("stopinsert")
+  end)
+
+  it("opens at the configured width and follows the screen", function()
+    assert.equals(80, width())
+    resize(160)
+    assert.equals(64, width())
+  end)
+
+  it("grows with Ctrl+Right and shrinks with Ctrl+Left in the panel, two columns a press", function()
+    press("<C-Right>")
+    assert.equals(82, width())
+    press("<C-Left><C-Left>")
+    assert.equals(78, width())
+  end)
+
+  it("leaves Ctrl+Left and Ctrl+Right to the editor outside the panel", function()
+    vim.api.nvim_set_current_win(editor)
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "one two" })
+    vim.api.nvim_win_set_cursor(0, { 1, 0 })
+    press("<C-Right>")
+
+    assert.same({ 1, 4 }, vim.api.nvim_win_get_cursor(0))
+    assert.equals(80, width())
+  end)
+
+  it("keeps a width chosen with the keys through screen resizes and a toggle", function()
+    press("<C-Right>")
+    resize(160)
+    assert.equals(82, width())
+    terms.toggle()
+    terms.toggle()
+    assert.equals(82, width())
+  end)
+
+  it("keeps a width set by any other resize, as by a drag", function()
+    vim.api.nvim_win_set_width(terms.win, 70)
+    vim.api.nvim_exec_autocmds("WinResized", {})
+    resize(160)
+
+    assert.equals(70, width())
+  end)
+
+  it("goes back to the configured width, and follows the screen again, on reset", function()
+    press("<C-Right>")
+    terms.reset_width()
+    assert.equals(80, width())
+    resize(160)
+    assert.equals(64, width())
+  end)
+
+  it("grows and shrinks the height of the panel window it is pressed in", function()
+    terms.split("below")
+    vim.cmd("stopinsert")
+    local pane = vim.api.nvim_get_current_win()
+    local before = vim.api.nvim_win_get_height(pane)
+    press("<C-Up>")
+    assert.equals(before + 2, vim.api.nvim_win_get_height(pane))
+    press("<C-Down>")
+    assert.equals(before, vim.api.nvim_win_get_height(pane))
+  end)
+end)
+
 describe("terms.maximise", function()
   local terms, editor, file
 

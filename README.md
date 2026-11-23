@@ -114,7 +114,7 @@ the buffer's file.
 | `show(slot, opts?)`            | Reveal/create the terminal in `slot` in the target window: the current terminal window, else the one used last, else the side panel. A tab already showing in another window swaps places with it. `opts.insert` controls whether focus enters insert mode; `opts.shell` starts a terminal the call creates with that command instead of the configured shell; `opts.buf` fills an empty slot with that buffer instead, with `opts.on_show(win)` / `opts.on_hide()`, `opts.windows()`, `opts.session()` and `opts.title()` (see Hosted buffers). |
 | `here()`                       | `<C-b>t`: a terminal in the current window, like `:edit` (`<C-o>` goes back), showing the most recent tab not on screen. |
 | `cycle()`                      | `<C-b>o`: focus the next terminal window. |
-| `split(direction)`             | `<C-b>"` (`"below"`) / `<C-b>%` (`"right"`): tmux split-window. Split the target terminal window and start a new shell in the lowest free slot. A pane split from the side panel carries `w:fishmonger_side` too; a docking layout manager that only stacks (edgy) stacks it whichever way it was split. |
+| `split(direction)`             | `<C-b>"` (`"below"`) / `<C-b>%` (`"right"`): tmux split-window. Split the target terminal window and start a new shell in the lowest free slot. A pane split from the side panel carries `w:fishmonger_side` too. |
 | `kill_pane()`                  | `<C-b>x`: tmux kill-pane. Shut down the target terminal's shell and close its window (`<C-b>&` keeps the window, showing another tab). |
 | `select(direction)`            | `<C-b>` arrow: tmux select-pane. `wincmd h/j/k/l`, for when the terminal program keeps the ctrl keys. |
 | `zoom()`                       | `<C-b>z`: tmux zoom. The side terminal fills the screen and keeps its tab strip, and tab keys still switch inside it. Press again, or enter another split, to dock it. |
@@ -124,6 +124,8 @@ the buffer's file.
 | `focus(entry)`                 | Switch to an `agents()` entry's tabpage and surface its terminal. |
 | `mark(kind)`                   | `<C-b>r` (`"read"`) / `<C-b>u` (`"unread"`): mark the current terminal's agent until its next status write. |
 | `files()`                      | `<C-b>f`: toggle the referenced-files list under the target terminal. |
+| `resize(dim, delta)`           | `<C-Right>`/`<C-Left>` (`"width"`, ±2) and `<C-Up>`/`<C-Down>` (`"height"`, ±2) in normal mode inside the side panel: widen its column, or heighten the panel window the cursor is in. Outside the panel the keys keep their builtin meaning. A width chosen this way, or by any other resize (a drag), sticks through screen resizes and `<C-t>` until `reset_width`. |
+| `reset_width(tab?)`            | Put a tabpage's panel back to `setup({ width })` (a number, or a function re-read on every screen resize). |
 | `panel_open(tab?)`             | Whether a tabpage's side panel is on screen (what `toggle()` would close). |
 | `dir(tab?)`                    | The directory a tabpage works in: its tab-local cwd, not the focused window's. |
 | `transfer(tab)`                | Carry the current terminal (live process, scrollback and all) into tabpage `tab`'s lowest free slot and follow it. The process's cwd does not change. |
