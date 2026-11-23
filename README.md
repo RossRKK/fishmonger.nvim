@@ -92,6 +92,8 @@ its prompt under the messages: `show(slot, { buf = bufnr, on_show = fn(win),
 on_hide = fn() })`. `on_show` runs each time the buffer is shown, with the
 window it is in. `on_hide` runs before the buffer leaves that window: another
 tab takes it, the panel closes, the tab is killed or moves to another tabpage.
+`windows = fn() -> win[]` names the windows `on_show` built: they are never the
+editor area `<C-b>Z` moves a tab into, and `<C-b>` pressed in one acts on its tab.
 `dir(tab)` is the directory such a tab should start in: the tabpage's own cwd,
 whichever of its windows has focus.
 
@@ -109,7 +111,7 @@ the buffer's file.
 | `setup(opts?)`                 | Initialise slot state and the side window. `opts.shell` overrides the shell command spawned in each terminal (default: `vim.o.shell`); `opts.agent` configures agent-status tracking (`{ dir, enabled }`); `opts.project_name(tab)` names a tabpage in the agent view; `opts.workspace(n)` resolves `<C-b>mN`'s workspace number to a tabpage; `opts.open_file(path, line)` opens a file from the referenced-files list; `opts.new_agent(tab)` is what `<C-b>a` does (see Agent view). |
 | `setup_keymaps()`              | Register the `<C-b>` prefix tab keymaps.            |
 | `setup_exit()`                 | Wire terminal-exit cleanup.                          |
-| `show(slot, opts?)`            | Reveal/create the terminal in `slot` in the target window: the current terminal window, else the one used last, else the side panel. A tab already showing in another window swaps places with it. `opts.insert` controls whether focus enters insert mode; `opts.shell` starts a terminal the call creates with that command instead of the configured shell; `opts.buf` fills an empty slot with that buffer instead, with `opts.on_show(win)` / `opts.on_hide()`, `opts.session()` and `opts.title()` (see Hosted buffers). |
+| `show(slot, opts?)`            | Reveal/create the terminal in `slot` in the target window: the current terminal window, else the one used last, else the side panel. A tab already showing in another window swaps places with it. `opts.insert` controls whether focus enters insert mode; `opts.shell` starts a terminal the call creates with that command instead of the configured shell; `opts.buf` fills an empty slot with that buffer instead, with `opts.on_show(win)` / `opts.on_hide()`, `opts.windows()`, `opts.session()` and `opts.title()` (see Hosted buffers). |
 | `here()`                       | `<C-b>t`: a terminal in the current window, like `:edit` (`<C-o>` goes back), showing the most recent tab not on screen. |
 | `cycle()`                      | `<C-b>o`: focus the next terminal window. |
 | `split(direction)`             | `<C-b>"` (`"below"`) / `<C-b>%` (`"right"`): tmux split-window. Split the target terminal window and start a new shell in the lowest free slot. A pane split from the side panel carries `w:fishmonger_side` too; a docking layout manager that only stacks (edgy) stacks it whichever way it was split. |

@@ -315,6 +315,9 @@ describe("hosted tabs with on_show and on_hide", function()
         end
         events[#events + 1] = { name, "hide", still_there }
       end,
+      windows = function()
+        return { prompt }
+      end,
     }
   end
 
@@ -383,6 +386,28 @@ describe("hosted tabs with on_show and on_hide", function()
 
     assert.same({ "chat", "hide", true }, events[2])
     assert.same({ "chat", "show", main }, events[3])
+  end)
+
+  it("moves into the main window on <C-b>Z when the window it built is wider", function()
+    vim.o.columns = 120 -- the panel's 80 columns outgrow the editor's
+    local main = vim.api.nvim_get_current_win()
+    terms.show(1, self_building("chat"))
+    terms.maximise()
+
+    assert.same({ "chat", "show", main }, events[3])
+  end)
+
+  it("docks back on <C-b>Z from a window it built in the main window", function()
+    vim.o.columns = 200
+    local main = vim.api.nvim_get_current_win()
+    local chat = self_building("chat")
+    terms.show(1, chat)
+    terms.maximise()
+    vim.api.nvim_set_current_win(chat.windows()[1])
+    terms.maximise()
+
+    assert.same({ "chat", "show", terms.win }, events[#events])
+    assert.are_not.equal(main, terms.win)
   end)
 
   it("is told when it trades windows with the tab shown in the other", function()

@@ -86,7 +86,7 @@ end
 -- Per-tabpage state, keyed by tabpage handle:
 --   slots  = slot (1..9) -> { buf = <bufnr>, chan = <job channel> }, or for a
 --            hosted buffer { buf, on_show = fn(win)?, on_hide = fn()?,
---            session = fn() -> id?, title = fn() -> string? }
+--            windows = fn() -> win[]?, session = fn() -> id?, title = fn() -> string? }
 --   recent = terms, most recently shown first; the current slot is the first
 --            one still in `slots`, so a renumber or a kill needs no bookkeeping
 local states = {}
@@ -321,12 +321,31 @@ local function window_showing(tab, buf)
   end
 end
 
--- The terminal window <C-b> acts on: the current window if it is one, else the
--- one showing the most recently used tab, else the side panel.
+-- The windows a hosted tab built around its buffer, as it reports them.
+local function built_windows(term)
+  return vim.tbl_filter(vim.api.nvim_win_is_valid, term.windows and term.windows() or {})
+end
+
+-- The window showing the tab `win` belongs to: `win` itself when it shows a
+-- tab, the window its tab is shown in when a hosted tab built it, else nil.
+local function host_window(state, tab, win)
+  if slot_of_buf(vim.api.nvim_win_get_buf(win), state) then
+    return win
+  end
+  for _, e in ipairs(managed(state)) do
+    if vim.tbl_contains(built_windows(e.term), win) then
+      return window_showing(tab, e.term.buf)
+    end
+  end
+end
+
+-- The terminal window <C-b> acts on: the one the current window belongs to,
+-- else the one showing the most recently used tab, else the side panel.
 local function target_window(state, tab)
   local cur = vim.api.nvim_get_current_win()
-  if vim.api.nvim_win_get_tabpage(cur) == tab and slot_of_buf(vim.api.nvim_win_get_buf(cur), state) then
-    return cur
+  local host = vim.api.nvim_win_get_tabpage(cur) == tab and host_window(state, tab, cur)
+  if host then
+    return host
   end
   local slot = current_slot(state)
   return slot and window_showing(tab, state.slots[slot].buf) or side_of(tab) or terminal_windows(state, tab)[1]
@@ -758,6 +777,7 @@ local refresh_os_title
 -- `opts.shell` starts a new terminal with that command instead of config.shell;
 -- `opts.buf` fills an empty slot with that buffer instead of a terminal, and
 -- `opts.on_show(win)` / `opts.on_hide()` go with it (see arrive and leave), as do
+-- `opts.windows()` (the windows on_show built, which act as the tab's own),
 -- `opts.session()` (the agent session it shows) and `opts.title()` (its tab's name).
 local function show_in(win, slot, opts)
   opts = opts or {}
@@ -797,6 +817,7 @@ local function show_in(win, slot, opts)
       buf = buf,
       on_show = opts.on_show,
       on_hide = opts.on_hide,
+      windows = opts.windows,
       session = opts.session,
       title = opts.title,
     }
@@ -1147,11 +1168,19 @@ function M.zoom()
 end
 
 -- The tabpage's editor area: its widest docked window outside the side panel,
--- so a file tree beside it is passed over.
+-- so a file tree beside it is passed over, as are windows a hosted tab built.
 local function main_window(tab)
+  local built = {}
+  for _, e in ipairs(managed(st(tab))) do
+    vim.list_extend(built, built_windows(e.term))
+  end
   local best
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-    if not vim.w[win][SIDE] and vim.api.nvim_win_get_config(win).relative == "" then
+    if
+      not vim.w[win][SIDE]
+      and not vim.tbl_contains(built, win)
+      and vim.api.nvim_win_get_config(win).relative == ""
+    then
       if not best or vim.api.nvim_win_get_width(win) > vim.api.nvim_win_get_width(best) then
         best = win
       end
@@ -1188,21 +1217,22 @@ end
 
 -- <C-b>Z: the side terminal takes the main window and the panel closes -- a
 -- real layout change, unlike zoom, so the rest of the tabpage stays usable.
--- From a terminal in the editor area it docks back, the window returning to
--- its file the way <C-b>t's does when its terminal goes.
+-- From a terminal in the editor area, or a window its tab built, it docks
+-- back, the window returning to its file the way <C-b>t's does when its terminal goes.
 function M.maximise()
   local tab = vim.api.nvim_get_current_tabpage()
   local state = st(tab)
   local cur = vim.api.nvim_get_current_win()
-  local cur_slot = slot_of_buf(vim.api.nvim_win_get_buf(cur), state)
-  if cur_slot and not vim.w[cur][SIDE] then
+  local host = host_window(state, tab, cur)
+  local cur_slot = host and slot_of_buf(vim.api.nvim_win_get_buf(host), state)
+  if cur_slot and not vim.w[host][SIDE] then
     leave(state.slots[cur_slot])
-    fall_back(cur, state)
+    fall_back(host, state)
     show_in(side_of(tab), cur_slot)
     return
   end
   local main = main_window(tab)
-  local from = vim.w[cur][SIDE] and cur or side_of(tab)
+  local from = host and vim.w[host][SIDE] and host or side_of(tab)
   local slot = from and slot_of_buf(vim.api.nvim_win_get_buf(from), state) or hidden_slot(state, tab)
   if not (main and slot) then
     return
