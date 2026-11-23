@@ -62,15 +62,17 @@ function M.setup(opts)
   })
 end
 
---- Open the list under terminal window `term_win` and go to it, or close it if open.
+--- Open the list under terminal window `term_win` (or under `below`, a window
+--- its tab built beneath it) and go to it, or close it if open.
 ---@param term_win integer
-function M.toggle(term_win)
+---@param below? integer
+function M.toggle(term_win, below)
   local open = list.by_terminal(vim.api.nvim_win_get_tabpage(term_win), LIST_OF)[term_win]
   if open then
     vim.api.nvim_win_close(open, true)
     return
   end
-  local win = open_list(term_win)
+  local win = open_list(term_win, below)
   render(win, env.session_of(vim.api.nvim_win_get_buf(term_win)))
   vim.api.nvim_set_current_win(win)
 end
@@ -115,11 +117,11 @@ function M.referenced(blocks, cwd)
   return out
 end
 
---- A new, empty list window under `term_win`, with its keys.
-function open_list(term_win)
+--- A new, empty list window under `below` (default `term_win`), with its keys.
+function open_list(term_win, below)
   local win = list.open(
     term_win,
-    { of_var = LIST_OF, filetype = "fishmonger-files", side_var = env.side_var }
+    { of_var = LIST_OF, filetype = "fishmonger-files", side_var = env.side_var, below = below }
   )
   local buf = vim.api.nvim_win_get_buf(win)
   vim.keymap.set("n", "<CR>", function()

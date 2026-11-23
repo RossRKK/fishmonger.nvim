@@ -1945,6 +1945,26 @@ describe("terms.files", function()
     assert.same({ "a.lua:2" }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
   end)
 
+  it("lists a hosted tab's files under the windows it built, not between them", function()
+    terms.setup({})
+    local prompt
+    terms.show(1, {
+      buf = vim.api.nvim_create_buf(false, true),
+      on_show = function(win)
+        prompt = vim.api.nvim_open_win(vim.api.nvim_create_buf(false, true), false, { split = "below", win = win })
+      end,
+      windows = function()
+        return { prompt }
+      end,
+    })
+
+    terms.files()
+
+    local list = vim.api.nvim_get_current_win()
+    assert.is_true(vim.api.nvim_win_get_position(list)[1] > vim.api.nvim_win_get_position(prompt)[1])
+    assert.equals(terms.win, vim.w[list].fishmonger_files_of)
+  end)
+
   it("opens a file in the editor area at its line", function()
     terms.setup({})
 

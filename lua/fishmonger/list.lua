@@ -22,11 +22,11 @@ function M.by_terminal(tab, of_var)
   return out
 end
 
---- A new, empty list window under `term_win`, holding a buffer of `opts.filetype`
---- and marked `opts.of_var` = `term_win`. `opts.side_var` is copied from the
---- terminal, so a layout manager docks the list with the panel.
+--- A new, empty list window under `opts.below` (default `term_win`), holding a
+--- buffer of `opts.filetype` and marked `opts.of_var` = `term_win`.
+--- `opts.side_var` is copied from the terminal, so the list counts as the panel's.
 ---@param term_win integer
----@param opts { of_var: string, filetype: string, side_var: string? }
+---@param opts { of_var: string, filetype: string, side_var: string?, below: integer? }
 ---@return integer win
 function M.open(term_win, opts)
   local buf = vim.api.nvim_create_buf(false, true)
@@ -39,7 +39,7 @@ function M.open(term_win, opts)
   local win = vim.api.nvim_open_win(
     placeholder,
     false,
-    { split = "below", win = term_win, height = 1, noautocmd = true }
+    { split = "below", win = opts.below or term_win, height = 1, noautocmd = true }
   )
   vim.w[win][opts.of_var] = term_win
   if opts.side_var then

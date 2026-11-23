@@ -1125,7 +1125,7 @@ end
 -- and its own winhighlight.
 local zooms = {}
 
-local fit_to_screen -- defined after its callers
+local fit_to_screen, lowest -- defined after their callers
 
 -- The editor minus the tabline and statusline/cmdline; zindex under the default
 -- 50 so popups (lazygit, the agent view) still land on top.
@@ -1295,13 +1295,29 @@ local function open_in_main(path, line)
 end
 
 -- <C-b>f: the list of files the target terminal's agent referenced, opened
--- under it (fishmonger/files.lua), or closed when it is open.
+-- under it and any windows its hosted tab built (fishmonger/files.lua), or
+-- closed when it is open.
 function M.files()
   local tab = vim.api.nvim_get_current_tabpage()
-  local win = target_window(st(tab), tab)
+  local state = st(tab)
+  local win = target_window(state, tab)
   if win then
-    require("fishmonger.files").toggle(win)
+    local _, term = slot_of_buf(vim.api.nvim_win_get_buf(win), state)
+    local unit = built_windows(term)
+    unit[#unit + 1] = win
+    require("fishmonger.files").toggle(win, lowest(unit))
   end
+end
+
+-- The window of `wins` whose bottom edge is lowest on screen.
+function lowest(wins)
+  local function bottom(win)
+    return vim.api.nvim_win_get_position(win)[1] + vim.api.nvim_win_get_height(win)
+  end
+  table.sort(wins, function(a, b)
+    return bottom(a) > bottom(b)
+  end)
+  return wins[1]
 end
 
 -- <C-b>Z: the side terminal takes the main window and the panel closes -- a
