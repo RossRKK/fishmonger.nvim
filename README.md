@@ -145,10 +145,10 @@ and `w:fishmonger_files_height` for a manager that sizes windows itself.
 ## Tests
 
 ```bash
-make test
+nix develop -c make test   # or: nix flake check
 ```
 
-Headless plenary/busted; covers the slot bookkeeping (which terminal occupies the
+Headless plenary/busted, with nvim and plenary from the flake; covers the slot bookkeeping (which terminal occupies the
 panel, which stay hidden, and how renumbering moves them). `vim.fn.jobstart` is
 faked so no real pty is needed.
 

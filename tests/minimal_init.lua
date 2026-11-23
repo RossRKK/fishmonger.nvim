@@ -1,13 +1,14 @@
 -- Runtime for the headless test suite: this plugin plus plenary (busted harness
--- + luassert). plenary is reused from the Neovim config's lazy install so CI and
--- a local run share one copy. The spec fakes vim.fn.jobstart and drives the
--- real window/buffer management, which runs fine headlessly.
+-- + luassert). The flake's shell and check set PLENARY_DIR; without them,
+-- plenary comes from the Neovim config's lazy install. The spec fakes
+-- vim.fn.jobstart and drives the real window/buffer management, which runs fine
+-- headlessly.
 
 local root = vim.fn.fnamemodify(vim.fn.expand("<sfile>:p"), ":h:h")
-local plenary = vim.fn.stdpath("data") .. "/lazy/plenary.nvim"
+local plenary = vim.env.PLENARY_DIR or (vim.fn.stdpath("data") .. "/lazy/plenary.nvim")
 
 if vim.fn.isdirectory(plenary) == 0 then
-  error("plenary.nvim not found at " .. plenary .. " -- open nvim once to let lazy install it")
+  error("plenary.nvim not found at " .. plenary .. " -- run the suite with `nix develop -c make test`")
 end
 
 vim.opt.runtimepath:prepend(root)
