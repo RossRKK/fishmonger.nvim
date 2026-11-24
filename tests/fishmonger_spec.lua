@@ -286,6 +286,24 @@ describe("hosted buffers", function()
     assert.equals(3, vim.api.nvim_win_get_cursor(terms.win)[1])
     vim.cmd("stopinsert")
   end)
+
+  it("hands sent text to its own send once shown, leaving its buffer alone", function()
+    local buf = hosted("/tmp/chat-j", { "## Me", "", "explain" })
+    local got
+    terms.show(2)
+    terms.show(1, {
+      buf = buf,
+      send = function(text)
+        got = { text = text, shown = vim.api.nvim_win_get_buf(terms.win) == buf }
+      end,
+    })
+    terms.toggle() -- hidden: send re-shows it before handing the text over
+
+    assert.is_true(terms.send(" lua/a.lua:12 "))
+
+    assert.same({ text = " lua/a.lua:12 ", shown = true }, got)
+    assert.same({ "## Me", "", "explain" }, vim.api.nvim_buf_get_lines(buf, 0, -1, true))
+  end)
 end)
 
 -- A hosted tab can build windows around its buffer, as a chat does its prompt,

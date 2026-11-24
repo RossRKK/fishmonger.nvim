@@ -86,7 +86,8 @@ end
 -- Per-tabpage state, keyed by tabpage handle:
 --   slots  = slot (1..9) -> { buf = <bufnr>, chan = <job channel> }, or for a
 --            hosted buffer { buf, on_show = fn(win)?, on_hide = fn()?,
---            windows = fn() -> win[]?, session = fn() -> id?, title = fn() -> string? }
+--            windows = fn() -> win[]?, session = fn() -> id?, title = fn() -> string?,
+--            send = fn(text)? }
 --   recent = terms, most recently shown first; the current slot is the first
 --            one still in `slots`, so a renumber or a kill needs no bookkeeping
 --   width  = the panel width chosen by hand, or nil to follow config.width
@@ -791,7 +792,8 @@ local refresh_os_title
 -- `opts.buf` fills an empty slot with that buffer instead of a terminal, and
 -- `opts.on_show(win)` / `opts.on_hide()` go with it (see arrive and leave), as do
 -- `opts.windows()` (the windows on_show built, which act as the tab's own),
--- `opts.session()` (the agent session it shows) and `opts.title()` (its tab's name).
+-- `opts.session()` (the agent session it shows), `opts.title()` (its tab's name)
+-- and `opts.send(text)` (types sent text into its prompt; see M.send).
 local function show_in(win, slot, opts)
   opts = opts or {}
   slot = clamp(slot)
@@ -833,6 +835,7 @@ local function show_in(win, slot, opts)
       windows = opts.windows,
       session = opts.session,
       title = opts.title,
+      send = opts.send,
     }
   elseif not have_buf then
     -- buf is on screen now, so the pty sizes to this window
@@ -880,8 +883,9 @@ local append_to_prompt -- defined after its caller
 -- on the prompt, not a submitted command, so you finish the line yourself -- a
 -- `path:line` reference followed by your comment to the agent, say. Refuses
 -- rather than spawning a shell to receive it, since text typed into a terminal
--- that has only just started races the shell's own startup. A hosted buffer's
--- prompt is its last line, so the text is appended there in insert mode.
+-- that has only just started races the shell's own startup. A hosted tab's
+-- `send` types the text into its prompt once it is shown; without one its
+-- buffer's last line is the prompt, so the text is appended there in insert mode.
 function M.send(text)
   local state = st()
   local slot = current_slot(state)
@@ -895,7 +899,11 @@ function M.send(text)
     vim.api.nvim_chan_send(term.chan, text)
   else
     M.show(slot, { insert = false })
-    append_to_prompt(term.buf, text)
+    if term.send then
+      term.send(text)
+    else
+      append_to_prompt(term.buf, text)
+    end
   end
   return true
 end

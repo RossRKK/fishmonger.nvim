@@ -94,6 +94,8 @@ window it is in. `on_hide` runs before the buffer leaves that window: another
 tab takes it, the panel closes, the tab is killed or moves to another tabpage.
 `windows = fn() -> win[]` names the windows `on_show` built: they are never the
 editor area `<C-b>Z` moves a tab into, and `<C-b>` pressed in one acts on its tab.
+`send = fn(text)` types what `send` is given into a prompt of its own, once the
+tab is shown, in place of appending to the buffer's last line.
 `dir(tab)` is the directory such a tab should start in: the tabpage's own cwd,
 whichever of its windows has focus.
 
