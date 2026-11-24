@@ -1533,6 +1533,27 @@ describe("per-tabpage state", function()
       assert.is_false(vim.api.nvim_buf_is_valid(buf))
     end
   end)
+
+  -- A hosted buffer's owner ends what it holds (an agent chat's session) on its
+  -- wipe, so that wipe must reach the buffer's autocmds from inside TabClosed's.
+  it("wipes a closed tabpage's hosted buffer, its own BufWipeout told", function()
+    terms.setup({})
+    vim.cmd("tabnew")
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(buf, "/tmp/chat-closed-tab")
+    terms.show(1, { buf = buf })
+    local told = false
+    vim.api.nvim_create_autocmd("BufWipeout", {
+      buffer = buf,
+      callback = function()
+        told = true
+      end,
+    })
+
+    vim.cmd("tabclose")
+    assert.is_false(vim.api.nvim_buf_is_valid(buf))
+    assert.is_true(told)
+  end)
 end)
 
 -- Carrying a live terminal to another tabpage (tmux move-window -t). The buffer

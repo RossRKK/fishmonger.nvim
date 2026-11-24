@@ -1735,9 +1735,11 @@ function M.setup(opts)
   })
   -- Closing a tabpage closes its windows but leaves its terminal buffers alive --
   -- and with the tabpage gone there is no longer any way to reach them. Shut the
-  -- shells down with the workspace rather than leaking orphaned ptys.
+  -- shells down with the workspace rather than leaking orphaned ptys. Nested, so a
+  -- hosted buffer's owner hears its wipe and ends what the buffer held.
   vim.api.nvim_create_autocmd("TabClosed", {
     group = grp,
+    nested = true,
     callback = function()
       local doomed = {}
       for tab, state in pairs(states) do
