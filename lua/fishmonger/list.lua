@@ -59,6 +59,26 @@ function M.open(term_win, opts)
   return win
 end
 
+--- Close list `win` with the rows it frees going to terminal window `term_win`: Vim
+--- hands them to the window above (an agent chat's pinned prompt) and 'equalalways'
+--- re-balances the rest, so every other window gets back the height it had.
+---@param win integer
+---@param term_win integer
+function M.close(win, term_win)
+  local heights = {}
+  for _, other in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win))) do
+    if other ~= win and other ~= term_win then
+      heights[other] = vim.api.nvim_win_get_height(other)
+    end
+  end
+  pcall(vim.api.nvim_win_close, win, true)
+  for other, height in pairs(heights) do
+    if vim.api.nvim_win_is_valid(other) and vim.api.nvim_win_get_height(other) ~= height then
+      vim.api.nvim_win_set_height(other, height)
+    end
+  end
+end
+
 --- Replace list `win`'s lines with `text`, leaving an unchanged buffer untouched.
 ---@param win integer
 ---@param text string[]

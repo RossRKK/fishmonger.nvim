@@ -66,8 +66,8 @@ function M.sync()
     end
   end
   -- Whatever is left belongs to no terminal with tasks.
-  for _, list in pairs(lists) do
-    pcall(vim.api.nvim_win_close, list, true)
+  for term_win, win in pairs(lists) do
+    list.close(win, term_win)
   end
 end
 

@@ -69,7 +69,7 @@ end
 function M.toggle(term_win, below)
   local open = list.by_terminal(vim.api.nvim_win_get_tabpage(term_win), LIST_OF)[term_win]
   if open then
-    vim.api.nvim_win_close(open, true)
+    list.close(open, term_win)
     return
   end
   local win = open_list(term_win, below)
@@ -88,8 +88,8 @@ function M.sync()
       lists[term_win] = nil
     end
   end
-  for _, orphan in pairs(lists) do
-    pcall(vim.api.nvim_win_close, orphan, true)
+  for term_win, orphan in pairs(lists) do
+    list.close(orphan, term_win)
   end
 end
 
@@ -131,7 +131,7 @@ function open_list(term_win, below)
     end
   end, { buffer = buf, desc = "Open this file in the editor" })
   vim.keymap.set("n", "q", function()
-    pcall(vim.api.nvim_win_close, win, true)
+    list.close(win, term_win)
   end, { buffer = buf, desc = "Close the referenced-files list" })
   -- Text written after the session's last event reaches no event; looking at the list catches it.
   vim.api.nvim_create_autocmd("BufEnter", { buffer = buf, callback = M.sync })
