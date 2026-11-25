@@ -1845,6 +1845,8 @@ function M.setup_keymaps()
       M.mark("read")
     elseif key == "u" then
       M.mark("unread")
+    elseif key == "n" then
+      require("fishmonger.tour").toggle_note()
     elseif key == "z" then
       M.zoom()
     elseif key == "Z" then
@@ -1887,7 +1889,7 @@ function M.setup_keymaps()
     "<C-b>",
     tab_prefix,
     {
-      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / Z maximise / & kill / . move / mN to workspace / a agents / A new agent / f referenced files / r mark read / u mark unread)',
+      desc = 'Terminal prefix (<C-b>N tab / c new / t here / " % split / x kill pane / arrows select pane / o next window / z zoom / Z maximise / & kill / . move / mN to workspace / a agents / A new agent / f referenced files / n tour note / r mark read / u mark unread)',
     }
   )
 end

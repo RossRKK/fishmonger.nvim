@@ -47,12 +47,21 @@ local function spec(session, n)
   }
 end
 
-local function list_under(term_win)
+--- The window under `term_win` marked with window variable `of_var`, or nil.
+local function marked(of_var, term_win)
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if vim.w[win].fishmonger_tour_of == term_win then
+    if vim.w[win][of_var] == term_win then
       return win
     end
   end
+end
+
+local function list_under(term_win)
+  return marked("fishmonger_tour_of", term_win)
+end
+
+local function note_under(term_win)
+  return marked("fishmonger_tour_note_of", term_win)
 end
 
 local function lines(win)
@@ -83,7 +92,7 @@ describe("tour list", function()
 
     local list = assert(list_under(term_win))
     assert.equals(3, #lines(list))
-    assert.truthy(lines(list)[1]:find("/src/step1.lua:10  Step 1", 1, true))
+    assert.equals("● /src/step1.lua:10", lines(list)[1])
     assert.same({ { path = "/src/step1.lua", line = 10 } }, opened)
     assert.same({ id = "toolu_s1", status = "active", current = 1, visited = { 1 } }, report(s))
     -- Focus stays where it was: the tour shows itself, it doesn't take the keyboard.
@@ -112,6 +121,64 @@ describe("tour list", function()
 
     assert.equals("●", vim.fn.strcharpart(rows[1], 0, 1))
     assert.equals("○", vim.fn.strcharpart(rows[2], 0, 1))
+  end)
+
+  it("can't be typed in", function()
+    local term_win = fixture()
+    tour.show(spec("s1", 2))
+
+    assert.is_false(vim.bo[vim.api.nvim_win_get_buf(list_under(term_win))].modifiable)
+  end)
+
+  it("shows the current step's note as markdown, read-only, between terminal and list", function()
+    local term_win = fixture()
+    tour.show(spec("s1", 2))
+
+    local note = assert(note_under(term_win))
+    local buf = vim.api.nvim_win_get_buf(note)
+    assert.same({ "Step 1" }, lines(note))
+    assert.equals("markdown", vim.bo[buf].filetype)
+    assert.is_false(vim.bo[buf].modifiable)
+    local term_row, note_row, list_row =
+      vim.api.nvim_win_get_position(term_win)[1],
+      vim.api.nvim_win_get_position(note)[1],
+      vim.api.nvim_win_get_position(list_under(term_win))[1]
+    assert.is_true(term_row < note_row and note_row < list_row)
+  end)
+
+  it("shows the note of the step under the list's cursor", function()
+    local term_win = fixture()
+    tour.show(spec("s1", 3))
+    local list = list_under(term_win)
+
+    vim.api.nvim_set_current_win(list)
+    vim.api.nvim_win_set_cursor(list, { 3, 0 })
+    vim.api.nvim_exec_autocmds("CursorMoved", { buffer = vim.api.nvim_win_get_buf(list) })
+
+    assert.same({ "Step 3" }, lines(note_under(term_win)))
+  end)
+
+  it("toggles the note away and back, the list staying", function()
+    local term_win = fixture()
+    tour.show(spec("s1", 2))
+
+    tour.toggle_note()
+    assert.is_nil(note_under(term_win))
+    assert.is_not_nil(list_under(term_win))
+
+    tour.toggle_note()
+    assert.same({ "Step 1" }, lines(note_under(term_win)))
+  end)
+
+  it("is dismissed with q from its note too", function()
+    local term_win = fixture()
+    local s = spec("s1", 2)
+    tour.show(s)
+
+    press(note_under(term_win), "q")
+
+    assert.is_nil(note_under(term_win))
+    assert.equals("dismissed", report(s).status)
   end)
 
   it("is dismissed with q: the list closes and the report says so", function()

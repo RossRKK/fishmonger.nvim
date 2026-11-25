@@ -85,8 +85,11 @@ An agent leads you through files in order with
 step `{ path, line?, description }`, over RPC (`nvim --server $NVIM
 --remote-expr`). The tour belongs to its session: its steps dock as a list
 under whichever terminal shows that session, and its first step opens through
-`open_file` as soon as that terminal is in view. `<CR>` opens the step under
-the cursor, `q` dismisses the tour. Each move writes `{ id, status, current?,
+`open_file` as soon as that terminal is in view. Above the list, a read-only
+`markdown` buffer shows the note of the step under the list's cursor (which
+moves to each step as it opens), for whatever renders markdown to draw;
+`<C-b>n` hides or shows it. `<CR>` opens the step under the cursor, `q` in
+the list or the note dismisses the tour. Each move writes `{ id, status, current?,
 visited }` (`status` is `active` or `dismissed`) to the `report` file, for the
 agent to read; `finish({ session })` ends the tour from the agent's side.
 `show` returns `""`, or why it refused (no steps, or no terminal here runs the
@@ -140,6 +143,7 @@ the buffer's file.
 | `focus(entry)`                 | Switch to an `agents()` entry's tabpage and surface its terminal. |
 | `mark(kind)`                   | `<C-b>r` (`"read"`) / `<C-b>u` (`"unread"`): mark the current terminal's agent until its next status write. |
 | `files()`                      | `<C-b>f`: toggle the referenced-files list under the target terminal. |
+| `tour.toggle_note()`           | `<C-b>n`: hide or show the note above every tour's list. |
 | `resize(dim, delta)`           | `<C-Right>`/`<C-Left>` (`"width"`, ±2) and `<C-Up>`/`<C-Down>` (`"height"`, ±2) in normal mode inside the side panel: widen its column, or heighten the panel window the cursor is in. Outside the panel the keys keep their builtin meaning. A width chosen this way, or by any other resize (a drag), sticks through screen resizes and `<C-t>` until `reset_width`. |
 | `reset_width(tab?)`            | Put a tabpage's panel back to `setup({ width })` (a number, or a function re-read on every screen resize). |
 | `panel_open(tab?)`             | Whether a tabpage's side panel is on screen (what `toggle()` would close). |
