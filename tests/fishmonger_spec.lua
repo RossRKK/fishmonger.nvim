@@ -1389,6 +1389,20 @@ describe("<C-b>a and <C-b>A", function()
     assert.same({}, asked)
   end)
 
+  it("drops itself for a follow-up key that has its own mapping", function()
+    setup_with_agent()
+    local other_prefix = 0
+    vim.keymap.set("n", "<M-b>", function()
+      other_prefix = other_prefix + 1
+    end)
+
+    press("<C-b><M-b>")
+    vim.keymap.del("n", "<M-b>")
+
+    assert.equals(1, other_prefix)
+    assert.same({}, asked)
+  end)
+
   it("<C-b>a opens nothing without a configured agent", function()
     terms.setup({})
     terms.setup_keymaps()

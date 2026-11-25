@@ -1785,7 +1785,7 @@ function M.setup_keymaps()
   -- for the follow-up key. Separate <C-b>1.. maps instead race the mapping
   -- timeout in terminal mode -- a digit pressed a beat late leaks to the shell.
   -- Global so it works from the live terminal and the editor (to summon a tab
-  -- when the panel is closed). In normal mode an unrecognised follow-up key
+  -- when the panel is closed). In normal mode an unrecognised, unmapped follow-up key
   -- falls through to the builtin <C-b> (page back) plus that key, so paging
   -- still works — just one keystroke later than stock.
   local arrows = {}
@@ -1847,6 +1847,9 @@ function M.setup_keymaps()
       if ok2 and dest:match("^[1-9]$") then
         M.transfer_to(tonumber(dest))
       end
+    elseif vim.fn.maparg(vim.fn.keytrans(key), vim.api.nvim_get_mode().mode:sub(1, 1)) ~= "" then
+      -- A key with its own mapping (another prefix, say) means the <C-b> was a slip: run that instead.
+      vim.api.nvim_feedkeys(key, "m", false)
     elseif vim.api.nvim_get_mode().mode:sub(1, 1) == "n" then
       -- Not one of ours: replay the raw <C-b> + key unmapped ("n") so the
       -- builtin scroll-back (and whatever the key does) still happens.
