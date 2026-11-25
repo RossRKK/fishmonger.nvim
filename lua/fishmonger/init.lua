@@ -1662,6 +1662,25 @@ function M.setup(opts)
     end,
     side_var = SIDE,
   })
+  -- An agent's tour, under the terminal its session runs in.
+  require("fishmonger.tour").setup({
+    terminal_windows = function(tab)
+      return terminal_windows(st(tab), tab)
+    end,
+    session_of = function(buf)
+      local record = agent.for_buf(buf, shell_pid)
+      return record and record.session
+    end,
+    is_session = function(session)
+      return vim.iter(M.agents()):any(function(a)
+        return a.session == session and a.tab ~= nil
+      end)
+    end,
+    open_file = function(path, line)
+      (config.open_file or open_in_main)(path, line)
+    end,
+    side_var = SIDE,
+  })
   -- term_title changes arrive via TermRequest (Claude Code updates it live,
   -- including its input-needed marker); repaint the winbar and re-bubble the
   -- OS title on those. Defer the bubble: b:term_title is applied after the

@@ -78,6 +78,20 @@ exist are listed, with the line their latest reference gave. `<CR>` opens one
 outside the panel), `q` or `<C-b>f` again closes the list. It follows the
 terminal window's tab and re-reads when the transcript has changed.
 
+## Tours
+
+An agent leads you through files in order with
+`require("fishmonger.tour").show({ id, session, title, steps, report })`, each
+step `{ path, line?, description }`, over RPC (`nvim --server $NVIM
+--remote-expr`). The tour belongs to its session: its steps dock as a list
+under whichever terminal shows that session, and its first step opens through
+`open_file` as soon as that terminal is in view. `<CR>` opens the step under
+the cursor, `q` dismisses the tour. Each move writes `{ id, status, current?,
+visited }` (`status` is `active` or `dismissed`) to the `report` file, for the
+agent to read; `finish({ session })` ends the tour from the agent's side.
+`show` returns `""`, or why it refused (no steps, or no terminal here runs the
+session).
+
 ## Hosted buffers
 
 A tab can hold any buffer, not only a terminal: `show(slot, { buf = bufnr })`
