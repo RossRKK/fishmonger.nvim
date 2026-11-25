@@ -552,6 +552,12 @@ local function term_agent(term)
   })
 end
 
+--- The agent in the slot holding `buf`, by its shell or, for a hosted buffer, the session it names.
+local function agent_in(buf)
+  local _, _, term = owner_of_buf(buf)
+  return term_agent(term)
+end
+
 -- Claude Code's own title glyphs: ✳ when waiting for input, the rest frames of
 -- its thinking spinner. A claude with no hook-reported status yet (a fresh
 -- instance hasn't run any hook) would otherwise leak these through the fallback
@@ -1641,7 +1647,7 @@ function M.setup(opts)
       return terminal_windows(st(tab), tab)
     end,
     session_of = function(buf)
-      local record = agent.for_buf(buf, shell_pid)
+      local record = agent_in(buf)
       return record and record.session
     end,
     tasks_of = agent.tasks,
@@ -1654,7 +1660,7 @@ function M.setup(opts)
       return terminal_windows(st(tab), tab)
     end,
     session_of = function(buf)
-      local record = agent.for_buf(buf, shell_pid)
+      local record = agent_in(buf)
       return record and record.transcript and { transcript = record.transcript, cwd = record.cwd }
     end,
     open_file = function(path, line)
@@ -1668,7 +1674,7 @@ function M.setup(opts)
       return terminal_windows(st(tab), tab)
     end,
     session_of = function(buf)
-      local record = agent.for_buf(buf, shell_pid)
+      local record = agent_in(buf)
       return record and record.session
     end,
     is_session = function(session)

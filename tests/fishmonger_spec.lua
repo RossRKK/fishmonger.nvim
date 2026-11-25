@@ -273,6 +273,38 @@ describe("hosted buffers", function()
     assert.same({ 1, "calm-otter", "FishmongerAgentRed" }, { listed.slot, listed.title, listed.colour_hl })
   end)
 
+  it("docks its session's tour under it, though it runs no shell", function()
+    local agent = require("fishmonger.agent")
+    local real = agent.get
+    agent.get = function(session) ---@diagnostic disable-line: duplicate-set-field
+      return session == "s1" and { session = "s1", state = "done" } or nil
+    end
+    terms.setup({ open_file = function() end })
+    terms.show(1, {
+      buf = hosted("/tmp/chat-tour"),
+      session = function()
+        return "s1"
+      end,
+    })
+    local tour = require("fishmonger.tour")
+
+    local refusal = tour.show({
+      id = "t1",
+      session = "s1",
+      title = "Walk",
+      steps = { { path = "/tmp/a.lua", line = 2, description = "here" } },
+      report = vim.fn.tempname() .. "/s1.json",
+    })
+    local docked = vim.iter(vim.api.nvim_tabpage_list_wins(0)):find(function(win)
+      return vim.w[win].fishmonger_tour_of == terms.win
+    end)
+    tour.finish({ session = "s1" })
+    agent.get = real
+
+    assert.equals("", refusal)
+    assert.is_not_nil(docked)
+  end)
+
   it("takes sent text at the end of its last line, typing on from there", function()
     local buf = hosted("/tmp/chat-g", { "## Me", "", "explain" })
     terms.show(2)
