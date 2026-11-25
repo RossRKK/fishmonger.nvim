@@ -32,6 +32,8 @@ function M.open(term_win, opts)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].filetype = opts.filetype
+  -- Its lines are the list's own; only set_lines writes them.
+  vim.bo[buf].modifiable = false
   -- noautocmd: a layout manager places a window when a buffer enters it, by
   -- which point the side mark must be there (as fishmonger's own panes do).
   local placeholder = vim.api.nvim_create_buf(false, true)
@@ -85,19 +87,22 @@ end
 function M.set_lines(win, text)
   local buf = vim.api.nvim_win_get_buf(win)
   if not vim.deep_equal(text, vim.api.nvim_buf_get_lines(buf, 0, -1, false)) then
+    vim.bo[buf].modifiable = true
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, text)
+    vim.bo[buf].modifiable = false
   end
 end
 
---- Size list `win` to `rows` (within 1..MAX_HEIGHT), resizing only when that
+--- Size list `win` to `rows` (within 1..`max`, default MAX_HEIGHT), resizing only when that
 --- changes: every resize also resizes the terminal above, and its program
 --- repaints. The height is also published in window variable `height_var`,
 --- since a layout manager that sizes its windows itself (edgy) would undo it.
 ---@param win integer
 ---@param rows integer
 ---@param height_var string
-function M.set_height(win, rows, height_var)
-  local height = math.max(1, math.min(rows, MAX_HEIGHT))
+---@param max? integer
+function M.set_height(win, rows, height_var, max)
+  local height = math.max(1, math.min(rows, max or MAX_HEIGHT))
   vim.w[win][height_var] = height
   if vim.api.nvim_win_get_height(win) ~= height then
     vim.api.nvim_win_set_height(win, height)
