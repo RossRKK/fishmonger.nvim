@@ -305,6 +305,45 @@ describe("hosted buffers", function()
     assert.is_not_nil(docked)
   end)
 
+  it(
+    "jumps its agent's file into the main window from the chat, but holds it while you edit",
+    function()
+      local agent = require("fishmonger.agent")
+      local real = agent.get
+      agent.get = function(session) ---@diagnostic disable-line: duplicate-set-field
+        return session == "s1" and { session = "s1", state = "done" } or nil
+      end
+      terms.setup({})
+      terms.show(1, {
+        buf = hosted("/tmp/chat-jump"),
+        session = function()
+          return "s1"
+        end,
+      })
+      local main = vim.iter(vim.api.nvim_tabpage_list_wins(0)):find(function(win)
+        return not vim.w[win].fishmonger_side
+      end)
+      local first, second = vim.fn.tempname() .. ".lua", vim.fn.tempname() .. ".lua"
+      vim.fn.writefile({ "a", "b", "c" }, first)
+      vim.fn.writefile({ "x" }, second)
+      local tour = require("fishmonger.tour")
+
+      vim.api.nvim_set_current_win(terms.win)
+      local from_chat = tour.jump({ session = "s1", path = first, line = 2 })
+      local focus_after_chat = vim.api.nvim_get_current_win()
+      vim.api.nvim_set_current_win(main)
+      local while_editing = tour.jump({ session = "s1", path = second })
+      local shown = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(main))
+      agent.get = real
+
+      assert.equals("opened", from_chat)
+      assert.equals(terms.win, focus_after_chat)
+      assert.equals(2, vim.api.nvim_win_get_cursor(main)[1])
+      assert.equals("waiting", while_editing)
+      assert.equals(vim.fn.resolve(first), vim.fn.resolve(shown))
+    end
+  )
+
   it("takes sent text at the end of its last line, typing on from there", function()
     local buf = hosted("/tmp/chat-g", { "## Me", "", "explain" })
     terms.show(2)

@@ -4,17 +4,22 @@
 
 local assert = require("luassert")
 
-local tour = require("fishmonger.tour")
+local tour
 
---- One terminal window (the current one) running session `s1`, and a tour list
---- wired to it. Returns the window and the files opened, in order.
+--- One terminal window (the current one) running session `s1`, and a fresh
+--- tour list wired to it. Returns the window, the files opened in order, and
+--- `you`: whether you are `editing` (set it), and which of those opens were
+--- `shown` leaving focus where it was.
 local function fixture()
   pcall(vim.cmd, "tabonly")
   pcall(vim.cmd, "only")
+  package.loaded["fishmonger.tour"] = nil
+  tour = require("fishmonger.tour")
   local term_win = vim.api.nvim_get_current_win()
   local term_buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_win_set_buf(term_win, term_buf)
   local opened = {}
+  local you = { editing = false, shown = {} }
   tour.setup({
     terminal_windows = function()
       return { term_win }
@@ -25,11 +30,18 @@ local function fixture()
     is_session = function(session)
       return session == "s1" or session == "s2"
     end,
-    open_file = function(path, line)
-      opened[#opened + 1] = { path = path, line = line }
+    is_editing = function()
+      return you.editing
+    end,
+    open_file = function(path, line, col)
+      opened[#opened + 1] = { path = path, line = line, col = col }
+    end,
+    show_file = function(path, line, col)
+      opened[#opened + 1] = { path = path, line = line, col = col }
+      you.shown[#you.shown + 1] = path
     end,
   })
-  return term_win, opened
+  return term_win, opened, you
 end
 
 --- A tour for `session` of `n` steps, reporting to a fresh temp file.
@@ -82,10 +94,16 @@ describe("tour list", function()
   after_each(function()
     tour.finish({ session = "s1" })
     tour.finish({ session = "s2" })
+    -- Waiting jumps outlast a tour's end: dismissing drops them.
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.w[win].fishmonger_tour_of then
+        press(win, "q")
+      end
+    end
   end)
 
   it("docks under its session's terminal and opens the first step at once", function()
-    local term_win, opened = fixture()
+    local term_win, opened, you = fixture()
     local s = spec("s1", 3)
 
     assert.equals("", tour.show(s))
@@ -94,6 +112,7 @@ describe("tour list", function()
     assert.equals(3, #lines(list))
     assert.equals("● /src/step1.lua:10", lines(list)[1])
     assert.same({ { path = "/src/step1.lua", line = 10 } }, opened)
+    assert.same({ "/src/step1.lua" }, you.shown)
     assert.same({ id = "toolu_s1", status = "active", current = 1, visited = { 1 } }, report(s))
     -- Focus stays where it was: the tour shows itself, it doesn't take the keyboard.
     assert.equals(term_win, vim.api.nvim_get_current_win())
@@ -228,10 +247,127 @@ describe("tour list", function()
     assert.same({}, r.visited)
   end)
 
+  it("holds its first step while you are editing, for you to open", function()
+    local term_win, opened, you = fixture()
+    you.editing = true
+    local s = spec("s1", 2)
+
+    tour.show(s)
+
+    local list = assert(list_under(term_win))
+    assert.equals("○ /src/step1.lua:10", lines(list)[1])
+    assert.same({}, opened)
+    assert.is_nil(report(s).current)
+
+    you.editing = false
+    tour.sync()
+    assert.same({}, opened)
+
+    press(list, "<CR>")
+    assert.same({ { path = "/src/step1.lua", line = 10 } }, opened)
+    assert.same({}, you.shown)
+    assert.equals(1, report(s).current)
+  end)
+
   it("refuses a session no terminal here runs, and a tour without steps", function()
     fixture()
 
     assert.truthy(tour.show(spec("elsewhere", 1)):find("elsewhere", 1, true))
     assert.truthy(tour.show(spec("s1", 0)):find("no steps", 1, true))
+  end)
+end)
+
+describe("jump", function()
+  after_each(function()
+    tour.finish({ session = "s1" })
+    tour.finish({ session = "s2" })
+    -- Waiting jumps outlast a tour's end: dismissing drops them.
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if vim.w[win].fishmonger_tour_of then
+        press(win, "q")
+      end
+    end
+  end)
+
+  it("opens at once, keeping focus, when you can see its agent and aren't editing", function()
+    local term_win, opened, you = fixture()
+
+    assert.equals("opened", tour.jump({ session = "s1", path = "/src/a.lua", line = 5, col = 3 }))
+
+    assert.same({ { path = "/src/a.lua", line = 5, col = 3 } }, opened)
+    assert.same({ "/src/a.lua" }, you.shown)
+    assert.is_nil(list_under(term_win))
+  end)
+
+  it("waits in the list while you are editing, until you open it", function()
+    local term_win, opened, you = fixture()
+    you.editing = true
+
+    assert.equals("waiting", tour.jump({ session = "s1", path = "/src/a.lua", line = 5 }))
+
+    local list = assert(list_under(term_win))
+    assert.same({ "↪ /src/a.lua:5" }, lines(list))
+    assert.same({}, opened)
+    press(list, "<CR>")
+    assert.same({ { path = "/src/a.lua", line = 5 } }, opened)
+    assert.is_nil(list_under(term_win))
+  end)
+
+  it("waits while its agent's terminal isn't in view, even when you aren't editing", function()
+    local term_win, opened = fixture()
+
+    assert.equals("waiting", tour.jump({ session = "s2", path = "/src/a.lua" }))
+
+    assert.same({}, opened)
+    assert.is_nil(list_under(term_win))
+  end)
+
+  it(
+    "waits after a running tour's steps, and outlasts the tour's end but not a dismissal",
+    function()
+      local term_win, _, you = fixture()
+      local s = spec("s1", 2)
+      tour.show(s)
+      you.editing = true
+
+      tour.jump({ session = "s1", path = "/src/a.lua", line = 5 })
+
+      local list = list_under(term_win)
+      assert.same(
+        { "● /src/step1.lua:10", "○ /src/step2.lua:20", "↪ /src/a.lua:5" },
+        lines(list)
+      )
+      vim.api.nvim_win_set_cursor(list, { 3, 0 })
+      vim.api.nvim_exec_autocmds("CursorMoved", { buffer = vim.api.nvim_win_get_buf(list) })
+      assert.truthy(lines(note_under(term_win))[1]:find("while you were editing", 1, true))
+
+      tour.finish({ session = "s1" })
+      assert.same({ "↪ /src/a.lua:5" }, lines(list_under(term_win)))
+
+      press(list_under(term_win), "q")
+      assert.is_nil(list_under(term_win))
+    end
+  )
+
+  it("lists a place once, at its latest jump", function()
+    local term_win, _, you = fixture()
+    you.editing = true
+
+    tour.jump({ session = "s1", path = "/src/a.lua", line = 5 })
+    tour.jump({ session = "s1", path = "/src/b.lua" })
+    tour.jump({ session = "s1", path = "/src/a.lua", line = 5 })
+
+    assert.same({ "↪ /src/b.lua", "↪ /src/a.lua:5" }, lines(list_under(term_win)))
+  end)
+
+  it("opens for a session no terminal here runs, unless you are editing", function()
+    local _, opened, you = fixture()
+
+    assert.equals("opened", tour.jump({ session = "elsewhere", path = "/src/a.lua" }))
+    you.editing = true
+    local refusal = tour.jump({ session = "elsewhere", path = "/src/b.lua" })
+
+    assert.truthy(refusal:find("not opened", 1, true))
+    assert.same({ { path = "/src/a.lua" } }, opened)
   end)
 end)

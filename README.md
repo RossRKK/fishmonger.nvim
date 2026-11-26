@@ -84,8 +84,9 @@ An agent leads you through files in order with
 `require("fishmonger.tour").show({ id, session, title, steps, report })`, each
 step `{ path, line?, description }`, over RPC (`nvim --server $NVIM
 --remote-expr`). The tour belongs to its session: its steps dock as a list
-under whichever terminal shows that session, and its first step opens through
-`open_file` as soon as that terminal is in view. Above the list, a read-only
+under whichever terminal shows that session, and its first step opens as soon
+as that terminal is in view, focus staying put, unless you are editing a file
+then, when it waits for `<CR>`. Above the list, a read-only
 `markdown` buffer shows the note of the step under the list's cursor (which
 moves to each step as it opens), for whatever renders markdown to draw;
 `<C-b>n` hides or shows it. `<CR>` opens the step under the cursor, `q` in
@@ -94,6 +95,12 @@ visited }` (`status` is `active` or `dismissed`) to the `report` file, for the
 agent to read; `finish({ session })` ends the tour from the agent's side.
 `show` returns `""`, or why it refused (no steps, or no terminal here runs the
 session).
+
+`jump({ session, path, line?, col? })` takes you to one place for an agent: at
+once if its terminal is in view and you aren't editing, else as a `↪` row after
+its tour's steps (or alone) that `<CR>` opens. It returns `"opened"`,
+`"waiting"`, or why neither. Waiting jumps outlast the tour's `finish`; `q` drops
+them with it.
 
 ## Hosted buffers
 
@@ -127,7 +134,7 @@ the buffer's file.
 
 | Function                       | Description                                         |
 | ------------------------------ | --------------------------------------------------- |
-| `setup(opts?)`                 | Initialise slot state and the side window. `opts.shell` overrides the shell command spawned in each terminal (default: `vim.o.shell`); `opts.agent` configures agent-status tracking (`{ dir, enabled }`); `opts.project_name(tab)` names a tabpage in the agent view; `opts.workspace(n)` resolves `<C-b>mN`'s workspace number to a tabpage; `opts.open_file(path, line)` opens a file from the referenced-files list; `opts.new_agent(tab)` is what `<C-b>a` does (see Agent view). |
+| `setup(opts?)`                 | Initialise slot state and the side window. `opts.shell` overrides the shell command spawned in each terminal (default: `vim.o.shell`); `opts.agent` configures agent-status tracking (`{ dir, enabled }`); `opts.project_name(tab)` names a tabpage in the agent view; `opts.workspace(n)` resolves `<C-b>mN`'s workspace number to a tabpage; `opts.open_file(path, line, col)` opens a file from the referenced-files list or a tour; `opts.new_agent(tab)` is what `<C-b>a` does (see Agent view). |
 | `setup_keymaps()`              | Register the `<C-b>` prefix tab keymaps.            |
 | `setup_exit()`                 | Wire terminal-exit cleanup.                          |
 | `show(slot, opts?)`            | Reveal/create the terminal in `slot` in the target window: the current terminal window, else the one used last, else the side panel. A tab already showing in another window swaps places with it. `opts.insert` controls whether focus enters insert mode; `opts.shell` starts a terminal the call creates with that command instead of the configured shell; `opts.buf` fills an empty slot with that buffer instead, with `opts.on_show(win)` / `opts.on_hide()`, `opts.windows()`, `opts.session()` and `opts.title()` (see Hosted buffers). |

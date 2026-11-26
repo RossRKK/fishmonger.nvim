@@ -66,10 +66,10 @@ local config = {
   -- their left) passes its own lookup, returning nil for a number not in use.
   ---@type nil|fun(n: integer): integer?
   workspace = nil,
-  -- How the referenced-files list (<C-b>f) opens a file at a line. Nil edits it
-  -- in the tabpage's widest window outside the side panel; a config that routes
-  -- files to its own main window passes its opener.
-  ---@type nil|fun(path: string, line?: integer)
+  -- How the referenced-files list (<C-b>f) and tours open a file at a line
+  -- (and column). Nil edits it in the tabpage's widest window outside the side
+  -- panel; a config that routes files to its own main window passes its opener.
+  ---@type nil|fun(path: string, line?: integer, col?: integer)
   open_file = nil,
   -- What <C-b>a does: start a new agent in tabpage `tab`, as a tab of its panel
   -- say. Nil leaves <C-b>a unbound, so a config picks its own kind of agent.
@@ -1294,7 +1294,7 @@ end
 
 -- Edit `path` in the tabpage's editor area, at `line` when given; with none
 -- open, one opens left of the panel rather than the file replacing a list.
-local function open_in_main(path, line)
+local function open_in_main(path, line, col)
   local win = main_window(vim.api.nvim_get_current_tabpage())
   if win then
     vim.api.nvim_set_current_win(win)
@@ -1304,8 +1304,33 @@ local function open_in_main(path, line)
   vim.cmd.edit(vim.fn.fnameescape(path))
   if line then
     local last = vim.api.nvim_buf_line_count(0)
-    vim.api.nvim_win_set_cursor(0, { math.min(math.max(line, 1), last), 0 })
+    local row, column = math.min(math.max(line, 1), last), math.max((col or 1) - 1, 0)
+    vim.api.nvim_win_set_cursor(0, { row, column })
   end
+end
+
+--- Open `path` as `open_file` does, but with focus (and terminal mode) left where it is.
+local function show_in_main(path, line, col)
+  local open = function()
+    (config.open_file or open_in_main)(path, line, col)
+  end
+  local win = main_window(vim.api.nvim_get_current_tabpage())
+  -- Run from the main window, an opener has no focus to move and no terminal mode to leave.
+  if win then
+    vim.api.nvim_win_call(win, open)
+  else
+    open()
+  end
+end
+
+--- Whether you are working in a file: the current window is an ordinary one holding a listed file.
+local function is_editing()
+  local win = vim.api.nvim_get_current_win()
+  local buf = vim.api.nvim_win_get_buf(win)
+  return vim.api.nvim_win_get_config(win).relative == ""
+    and not vim.w[win][SIDE]
+    and vim.bo[buf].buftype == ""
+    and vim.bo[buf].buflisted
 end
 
 -- <C-b>f: the list of files the target terminal's agent referenced, opened
@@ -1682,9 +1707,11 @@ function M.setup(opts)
         return a.session == session and a.tab ~= nil
       end)
     end,
-    open_file = function(path, line)
-      (config.open_file or open_in_main)(path, line)
+    is_editing = is_editing,
+    open_file = function(path, line, col)
+      (config.open_file or open_in_main)(path, line, col)
     end,
+    show_file = show_in_main,
     side_var = SIDE,
   })
   -- term_title changes arrive via TermRequest (Claude Code updates it live,
